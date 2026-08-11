@@ -6,8 +6,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import daos
-from ..deps import current_user
-from ..orchestrator import run_ticket
+from ..deps import current_user, require_role
+from .. import daos as _daos
+from ..orchestrator import run_ticket, resume_ticket
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -94,3 +95,30 @@ def events(ticket_id: int, ctx: dict = Depends(current_user)):
             yield f"data: {json.dumps({'type': e['event_type'], 'at': e['created_at'], 'payload': payload}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+class ApproveIn(BaseModel):
+    approval_id: int
+    decision: str = "approve"   # approve | reject
+    reason: str = ""
+
+
+@router.post("/{ticket_id}/approve")
+def approve(body: ApproveIn, ticket_id: int, ctx: dict = Depends(require_role("operator", "admin"))):
+    ap = _daos.get_approval(body.approval_id)
+    if not ap or ap["ticket_id"] != ticket_id:
+        raise HTTPException(status_code=404, detail="审批单不存在")
+    if ap["status"] != "pending":
+        raise HTTPException(status_code=400, detail="该审批已被处理")
+    if body.decision == "reject":
+        _daos.decide_approval(body.approval_id, "rejected", ctx["username"], body.reason)
+        return {"status": "rejected"}
+    _daos.decide_approval(body.approval_id, "approved", ctx["username"], body.reason)
+    result = resume_ticket(ticket_id, body.approval_id, actor=ctx["username"])
+    return {"decision": "approved", "run": result}
+
+
+@router.get("/{ticket_id}/approvals", dependencies=[Depends(current_user)])
+def approvals(ticket_id: int, ctx: dict = Depends(current_user)):
+    return [_daos.get_approval(a["id"]) and {**dict(_daos.get_approval(a["id"]))}
+            for a in _daos.pending_for_ticket(ticket_id)]
