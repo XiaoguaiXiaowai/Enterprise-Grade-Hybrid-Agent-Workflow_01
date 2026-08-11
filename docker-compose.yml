@@ -1,0 +1,7 @@
+# M1 单机编排：仅后端 app（Next.js web 将在 M3 加入）
+services:
+  app:
+    build: .
+    env_file: .env
+    volumes: ["./data:/app/data"]
+    ports: ["8000:8000"]
