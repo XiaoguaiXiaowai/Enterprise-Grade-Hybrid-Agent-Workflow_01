@@ -1,5 +1,5 @@
 // 前端 API 客户端：封装 fetch、token 持久化、SSE。
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
