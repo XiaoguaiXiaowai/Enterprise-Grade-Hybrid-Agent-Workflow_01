@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from .. import daos
 from ..deps import current_user, require_role
+from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
 
@@ -83,7 +84,11 @@ def run(ticket_id: int, ctx: dict = Depends(current_user)):
 
 
 @router.get("/{ticket_id}/events")
-def events(ticket_id: int, ctx: dict = Depends(current_user)):
+def events(ticket_id: int, token: str | None = None):
+    # 兼容 EventSource（无法带自定义 header）——允许经 query token 复用会话
+    ctx = resolve_token(token) if token else None
+    if ctx is None:
+        raise HTTPException(status_code=401, detail="未登录")
     row = daos.get_ticket(ticket_id)
     if row is None or row["tenant_id"] != ctx["tenant_id"]:
         raise HTTPException(status_code=404, detail="工单不存在")

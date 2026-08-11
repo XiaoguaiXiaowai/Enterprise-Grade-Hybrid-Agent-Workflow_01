@@ -4,7 +4,7 @@
 > 它不是演示 AI 多聪明，而是演示 **AI 如何被可靠、可控、可审计地接进企业业务**。
 
 - 详细开发文档：请见 [`doc/开发文档.md`](doc/开发文档.md)
-- 进度说明：**M1 骨架完成 ✓ · M2 Harness 内核完成 ✓ **（见 [`M2_README.md`](M2_README.md)）
+- 进度说明：**M1 骨架完成 ✓ · M2 Harness 内核完成 ✓ · M3 前端/知识库/部署完成 ✓**（各阶段说明见 `M1_README.md` · `M2_README.md` · `M3_README.md`）
 - 学习笔记原文：[`doc/学习笔记.md`](doc/学习笔记.md)
 
 ---
@@ -174,7 +174,7 @@ mindmap
 | Workflow | 自研状态机 | 不用 LangGraph，快照/HITL 原理可控可讲 |
 | LLM | OpenAI SDK ⇄ Ollama | 统一 `/v1/chat/completions`，一个开关切换 |
 | 存储 | SQLite + 文件系统 | 单机、0 成本、状态外部化 |
-| 前端 | Next.js (App Router) | 贴近真实企业栈，与 FastAPI 解耦，面试加分 |
+| 前端 | Next.js 14 (App Router) | 贴近真实企业栈，与 FastAPI 解耦，面试加分 |
 | 部署 | Docker Compose + Nginx + HTTPS | 阿里云 Ubuntu 单机零成本上线 |
 
 ---

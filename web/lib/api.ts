@@ -75,12 +75,10 @@ export function getMetrics() {
   return req<any>("/api/metrics");
 }
 
-// SSE：工单事件流
+// SSE：工单事件流（EventSource 无法带自定义 header，token 经 query 传递）
 export function subscribeEvents(ticketId: number, onEvent: (e: any) => void): () => void {
-  const token = getToken();
-  const es = new EventSource(`${API}/api/tickets/${ticketId}/events`, {
-    headers: { "X-Auth-Token": token || "" } as any,
-  });
+  const token = getToken() || "";
+  const es = new EventSource(`${API}/api/tickets/${ticketId}/events?token=${encodeURIComponent(token)}`);
   es.onmessage = (msg) => {
     try { onEvent(JSON.parse(msg.data)); } catch { /* ignore */ }
   };

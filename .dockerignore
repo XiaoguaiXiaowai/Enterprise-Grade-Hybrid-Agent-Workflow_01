@@ -1,0 +1,7 @@
+.venv
+data
+doc
+.git
+*.db
+*.db-wal
+*.db-shm

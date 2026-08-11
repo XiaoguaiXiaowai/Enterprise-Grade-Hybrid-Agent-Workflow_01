@@ -69,16 +69,16 @@ class _ReaderBackend:
         if any(k in _goal for k in ("开通", "授权", "权限", "grant", "只读")):
             plan = (
                 "PLAN\n"
-                "1. 检索知识库确认流程：search_kb(query=开通数据库只读权限)\n"
-                "2. 查询目标用户：query_user_dir(principal=u-1024)\n"
-                "3. 发起高风险授权：grant_db_readonly(principal=u-1024, grant_type=readonly)\n"
+                "1. 检索知识库：search_kb\n"
+                "2. 查询目标用户：query_user_dir\n"
+                "3. 发起高风险授权：grant_db_readonly\n"
                 "4. 待审批通过后完成，done:true"
             )
         else:
             plan = (
                 "PLAN\n"
-                "1. 检索企业知识库：search_kb(query=<目标>)\n"
-                "2. 若工单涉及用户/权限，查询用户目录：query_user_dir(principal=<u-id>)\n"
+                "1. 检索企业知识库：search_kb\n"
+                "2. 若工单涉及用户/权限，查询用户目录：query_user_dir\n"
                 "3. 汇总答案，done:true"
             )
         return LLMResult(content=plan, model="reader/offline", provider="reader",

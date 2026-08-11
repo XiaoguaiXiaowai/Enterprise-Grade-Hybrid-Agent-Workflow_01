@@ -25,15 +25,19 @@ PROMPT_VERSION = "M2-v1"
 def _parse_tool_calls(plan_text: str) -> list[dict]:
     """从 LLM 计划解析 {tool, params} 列表（M2 简化解析，可换 structured output）。"""
     calls = []
+    seen = set()
     known = {t.name for t in registry.list_tools()}
-    for m in re.finditer(r"([a-z_]+)\s*\(\s*(.*?)\)", plan_text):
-        tool, raw = m.group(1), m.group(2)
-        if tool not in known:
+    # 支持两种形式：tool() 和 tool(param=value, ...)，以及裸 tool 名
+    for tok in re.findall(r"([a-z_]+)\s*(?:\(\s*([^)]*)\s*\))?", plan_text):
+        tool, raw = tok[0], tok[1]
+        if tool not in known or tool in seen:
             continue
         params = {}
-        for kv in re.findall(r"([a-zA-Z_]+)\s*=\s*([^,)]+)", raw):
-            params[kv[0]] = kv[1].strip().strip("'\"")
+        if raw:
+            for kv in re.findall(r"([a-zA-Z_]+)\s*=\s*([^,)]+)", raw):
+                params[kv[0]] = kv[1].strip().strip("'\"")
         calls.append({"tool": tool, "params": params})
+        seen.add(tool)
     return calls
 
 
@@ -184,8 +188,12 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
     daos.add_event(ticket_id, "model_call", {"content": plan_text, "provider": result.provider}, actor)
 
     calls = _parse_tool_calls(plan_text)
+    ticket = daos.get_ticket(ticket_id)  # 需标题/描述补全参数
     for c in calls:
-        _execute_tool(ticket_id, c["tool"], c["params"], actor, budget, req_id,
+        params = c["params"]
+        default_params = _route_params(ticket, c["tool"])
+        merged = {**default_params, **params}  # LLM 显式参数优先，缺失用路由兜底
+        _execute_tool(ticket_id, c["tool"], merged, actor, budget, req_id,
                       result.provider, result.model)
     # 若无工具但输出 done:true，直接收敛
     if should_stop(plan_text) and not calls:
