@@ -1,13 +1,21 @@
-"""OpenAI Agents SDK 执行器：组装 Agent 并运行 Runner.run（OpenRouter 主 + Ollama 兜底）。
+"""OpenAI Agents SDK 执行器：组装 Agent + 运行 Runner + 原生 HITL 中断/恢复。
 
-职责（仅替换 M2 的「计划-执行循环」，HITL 保持现状）：
-- 用 SDK 的 Agent+Runner 取代 _plan_and_execute 的手写 tool-calling 解析
-- 模型由 model_router.route() 决定：openrouter:... 走 OpenRouter，ollama:... 走本地
-- OpenRouter 失败（网络/鉴权/模型 4xx/5xx）→ 自动用同 Prompt 在 Ollama 上重跑（方案 A 兜底）
-- 工具函数仍来自 app.agents_tools（含 HITL/去重/budget/trace side-effects）
-- 顶层一次 run 由 agents_trace.LocalTraceProcessor 转存进本地 SQLite（复用现有前端）
+Phase B：
+- 用 SDK 的 Agent+Runner 取代手写 tool-calling 循环
+- 模型由 model_router.route() 决定；OpenRouter 失败自动切 Ollama 兜底，均不可用则抛
+  SdkUnavailable（orchestrator 降级传统 LLM 网关）
+- 高风险工具用 function_tool(needs_approval=True)，SDK 在调用前中断
+  （RunResult.interruptions → ToolApprovalItem），我们据此落库审批并把
+  RunState + Agent + 上下文快照存入内存注册表 _PENDING[approval_id]
+- 审批通过/驳回后，用保存的 RunState + state.approve/reject 恢复同一 run；恢复后
+  仍可能再次中断（递归处理）
+
+线程语义：Runner.run_sync 要求当前线程无运行中的事件循环。FastAPI 这些 `def` 路由
+在线程池中执行、无事件循环，因此同步 run/resume 安全。
 """
 from __future__ import annotations
+
+import json
 
 from . import agents_provider as ap
 from . import agents_tools as at
@@ -19,7 +27,9 @@ from . import trace as trace_mod
 _SYSTEM = (
     "你是企业 IT 工单处理 Agent。依据上下文逐步规划并调用工具完成任务。"
     "每一步先判断是否需要工具：能直接回答就结束；需要数据就调用对应工具。"
-    "完成时明确输出最终结论。禁止执行任何未在白名单中的操作；高风险操作只发起审批。"
+    "注意：高风险工具（如开通/回收权限）必须在规划完成时直接调用，系统会在真正执行前"
+    "暂停并向审批人征得同意（HITL 审批由系统处理），因此不要只描述风险而不调用工具。"
+    "完成时明确输出最终结论。不要调用未在白名单中的工具。"
 )
 
 
@@ -32,85 +42,163 @@ def _build_agent(instructions, tools, model):
     return Agent(name="IT Ticket Agent", instructions=instructions, tools=tools, model=model)
 
 
-def _run(agent, user_input, run_config, run_ctx, max_turns=25):
+def _run(agent, input, run_config, run_ctx=None, max_turns=25):
     from agents import Runner  # 运行期导入
-    return Runner.run_sync(agent, input=user_input, context=run_ctx,
+    # 恢复模式（input 为 RunState）时携带自身 context，不再单独传 context
+    return Runner.run_sync(agent, input=input, context=run_ctx,
                            run_config=run_config, max_turns=max_turns)
 
 
-def run_sdk(ticket_id: int, ctx: dict, actor: str, budget, routing: dict,
-            req_id: str = ""):
-    """执行 SDK 计划-工具循环；返回 (final_output, provider_used, model_used)。
+# 内存：approval_id -> 待恢复的 run（进程内单服务，等价与 skills/grant.py 的内存态）
+_PENDING: dict[int, dict] = {}
 
-    抛 _NeedsApproval / BudgetExceeded / RuntimeError，由 orchestrator 统一处理。
-    """
-    from .orchestrator import actor_role  # 运行期导入避免环
-    user_input = render(ctx)
-    run_ctx = {"ticket_id": ticket_id, "actor": actor,
-               "actor_role": actor_role(actor), "budget": budget}
 
-    provider = ap.build_provider()
-    fallback_model = ap.build_fallback_model()
-    tools = at.build_sdk_tools(actor_role(actor))
-
+def _make_run_config(ticket_id, ctx, req_id, routing, actor):
     from agents import RunConfig  # 运行期导入
-    run_config = RunConfig(
-        model_provider=provider,
+    return RunConfig(
+        model_provider=ap.build_provider(),
         tracing_disabled=not atrace._SDK_OK,
         trace_metadata={"ticket_id": ticket_id, "req_id": req_id,
                         "provider": routing["provider"], "model": routing["model"],
                         "actor": actor, "prompt_version": "M4-agents",
-                        "state_before": ctx["state"], "state_after": "agent_running"},
+                        "state_before": ctx.get("state", ""), "state_after": "agent_running"},
     )
 
+
+def _model_name(routing) -> str:
     model = routing["model"]
     if routing["provider"] == "ollama" and not model.startswith("ollama:"):
         model = f"ollama:{model}"
     elif routing["provider"] == "openrouter" and not model.startswith("openrouter:"):
         model = f"openrouter:{model}"
-    agent = _build_agent(_SYSTEM, tools, model)
+    return model
 
+
+def _interruption_params(item) -> dict:
     try:
-        result = _run(agent, user_input, run_config, run_ctx, max_turns=budget.max_steps)
-    except Exception as e:
-        # OpenRouter 失败 → Ollama 兜底（同 agent，仅换 model 与 provider）
-        if routing["provider"] == "openrouter":
-            try:
-                fb_agent = _build_agent(_SYSTEM, tools, fallback_model)
-                result = _run(fb_agent, user_input, run_config, run_ctx,
-                              max_turns=budget.max_steps)
-                return (result.final_output or "", "ollama", settings.ollama_model_name)
-            except Exception as e2:
-                # OpenRouter 与 Ollama 都不可用 → 交给 orchestrator 走传统 LLM 网关（可离线 reader）
-                raise SdkUnavailable(f"SDK 模型调用失败: {e}; Ollama 兜底也失败: {e2}") from e2
-        raise RuntimeError(f"Agent 执行失败: {e}") from e
+        args = getattr(item, "arguments", None)
+        if args:
+            parsed = json.loads(args)
+            return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    return {}
 
-    # SDK 运行结束（工具异常可能被 SDK 吞掉）：把 RunContext 里记录的治理事件
-    # 按 M2 语义在 SDK 外重新抛出，保证 HITL/预算/守卫行为与旧循环一致。
-    from .orchestrator import _NeedsApproval  # 运行期导入
-    pending = run_ctx.get("hitl_pending")
-    if pending:
-        raise _NeedsApproval(pending["approval_id"], pending["tool"], pending["params"])
-    terr = run_ctx.get("tool_error")
-    if terr:
-        if terr.get("type") == "BudgetExceeded":
-            from .budget import BudgetExceeded
-            raise BudgetExceeded(terr.get("kind", "steps"), 0, 0)
-        raise RuntimeError(terr["error"])
 
-    # 补一条 final trace（含 final_output），复用现有前端展示收敛结论
+def _raise_governance(run_ctx):
+    """工具侧吞掉的治理异常 → 按 M2 语义在 SDK 外重新抛出。"""
+    terr = (run_ctx or {}).get("tool_error")
+    if not terr:
+        return
+    if terr.get("type") == "BudgetExceeded":
+        from .budget import BudgetExceeded
+        raise BudgetExceeded(terr.get("kind", "steps"), 0, 0)
+    raise RuntimeError(terr["error"])
+
+
+def _handle_done(ticket_id, result, routing, req_id, run_ctx, budget):
+    """无中断的收敛：写 final trace 并返回 done 结果。"""
     final_output = result.final_output or ""
     trace_mod.write(
         req_id=req_id, ticket_id=ticket_id,
         model=routing["model"], provider=routing["provider"],
         prompt_version="M4-agents",
         io={"final_output": final_output},
-        state_before=ctx["state"], state_after="done",
+        state_before=(run_ctx or {}).get("state_before", ""), state_after="done",
         token_usage=getattr(result, "usage", None) or {},
         context_source="agents_sdk_final",
     )
-    return (final_output, routing["provider"], routing["model"])
+    return {"status": "done", "final_output": final_output,
+            "provider": routing["provider"], "model": routing["model"]}
 
+
+def _handle_interruptions(ticket_id, result, routing, req_id, run_ctx, budget):
+    """有中断：为每个 ToolApprovalItem 落库审批并保存 RunState 供恢复。"""
+    from . import daos  # 运行期导入
+    state = result.to_state()
+    agent = result.last_agent
+    approvals = []
+    actor = (run_ctx or {}).get("actor", "system")
+    for item in result.interruptions:
+        tool_name = item.name or ""
+        params = _interruption_params(item)
+        aid = daos.request_approval(ticket_id, tool_name, params, actor)
+        daos.add_event(ticket_id, "hitl",
+                       {"approval_id": aid, "tool": tool_name, "params": params}, actor)
+        _PENDING[aid] = {
+            "agent": agent, "state": state, "item": item,
+            "ticket_id": ticket_id, "tool": tool_name, "params": params,
+            "routing": routing, "req_id": req_id, "run_ctx": run_ctx, "budget": budget,
+        }
+        approvals.append({"approval_id": aid, "tool": tool_name, "params": params})
+    return {"status": "awaiting_approval", "approvals": approvals}
+
+
+def _process_result(ticket_id, result, routing, req_id, run_ctx, budget):
+    run_ctx = run_ctx or {}
+    _raise_governance(run_ctx)
+    if result.interruptions:
+        return _handle_interruptions(ticket_id, result, routing, req_id, run_ctx, budget)
+    return _handle_done(ticket_id, result, routing, req_id, run_ctx, budget)
+
+
+def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
+    """执行 SDK 计划-工具循环；遇原生中断返回 awaiting_approval（审批在内存注册表）。"""
+    from .orchestrator import actor_role  # 运行期导入避免环
+    user_input = render(ctx)
+    run_ctx = {"ticket_id": ticket_id, "actor": actor,
+               "actor_role": actor_role(actor), "budget": budget,
+               "state_before": ctx["state"]}
+    run_config = _make_run_config(ticket_id, ctx, req_id, routing, actor)
+    tools = at.build_sdk_tools(actor_role(actor))
+    agent = _build_agent(_SYSTEM, tools, _model_name(routing))
+
+    try:
+        result = _run(agent, user_input, run_config, run_ctx, max_turns=budget.max_steps)
+    except Exception as e:
+        if routing["provider"] == "openrouter":
+            try:
+                fb_tools = at.build_sdk_tools(actor_role(actor))
+                fb_agent = _build_agent(_SYSTEM, fb_tools, ap.build_fallback_model())
+                result = _run(fb_agent, user_input, run_config, run_ctx,
+                              max_turns=budget.max_steps)
+                routing = {**routing, "provider": "ollama",
+                           "model": settings.ollama_model_name}
+            except Exception as e2:
+                raise SdkUnavailable(
+                    f"SDK 模型调用失败: {e}; Ollama 兜底也失败: {e2}") from e2
+        else:
+            raise RuntimeError(f"Agent 执行失败: {e}") from e
+
+    return _process_result(ticket_id, result, routing, req_id, run_ctx, budget)
+
+
+def resume_run(approval_id: int, decision: str, rejection_message: str | None = None):
+    """审批后恢复；返回与 run_sdk 相同的结果结构，可能再次 awaiting_approval。"""
+    from . import daos  # 运行期导入
+    entry = _PENDING.get(approval_id)
+    if not entry:
+        raise RuntimeError(f"无此待审批 run（进程重启需重新触发工单）: {approval_id}")
+
+    state = entry["state"]
+    if decision == "approve":
+        state.approve(entry["item"])
+    else:
+        state.reject(entry["item"], rejection_message=rejection_message or "被审批人驳回")
+
+    agent = entry["agent"]
+    ticket_id = entry["ticket_id"]
+    routing = entry["routing"]
+    req_id = entry["req_id"]
+    run_ctx = entry["run_ctx"]
+    budget = entry["budget"]
+    max_turns = budget.max_steps if budget else 25
+
+    run_config = _make_run_config(ticket_id, run_ctx or {}, req_id, routing,
+                                  (run_ctx or {}).get("actor", "system"))
+    _PENDING.pop(approval_id, None)
+    result = _run(agent, state, run_config, None, max_turns=max_turns)
+    return _process_result(ticket_id, result, routing, req_id, run_ctx, budget)
 
 
 class SdkUnavailable(RuntimeError):

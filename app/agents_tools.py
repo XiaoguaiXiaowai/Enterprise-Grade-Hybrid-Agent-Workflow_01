@@ -2,10 +2,11 @@
 
 治理边界（与 M2 对齐）：
 - 工具实现仍走 registry（白名单/RBAC/脱敏在 skills/*.py）
-- 每次工具调用保留 M2 side-effects：HITL(高风险) / 去重 / tool_calls 落库 /
+- 每次工具调用保留 M2 side-effects：去重 / tool_calls 落库 /
   trace(tool 级) / ticket_events / budget.consume_step
+- 高风险工具的审批交由 SDK 原生 interruptions（function_tool needs_approval=True），
+  由 agents_runner 在 run 结束后持久化审批并支持恢复；工具体不再自行发起 HITL
 - 与 orchestrator 的循环引用用「运行期惰性导入」规避（模块加载期不互相 import）
-- SDK 工具函数显式声明类型标注（与 registry 工具签名一致），function_tool 才能生成 JSON schema
 - SDK 不可用时 build_sdk_tools 返回空列表，orchestrator 走既有 LLMGateway 循环
 """
 from __future__ import annotations
@@ -39,17 +40,6 @@ def _ticket_status(ticket_id) -> str:
     return row["status"] if row else "?"
 
 
-def _request_hitl_for(ticket_id, tool, params, actor, ctx) -> int:
-    """发起 HITL 审批，并把待审批信息写入 RunContext（由 runner 在 SDK 外转成中断）。"""
-    from .orchestrator import _request_hitl  # 运行期导入
-    aid = _request_hitl(ticket_id, tool, params, actor)
-    pending = ctx.setdefault("hitl_pending", {})
-    pending.setdefault("approval_id", aid)
-    pending.setdefault("tool", tool)
-    pending.setdefault("params", params)
-    return aid
-
-
 def _record_tool_error(ctx, tool, error, extra=None):
     """把工具侧异常记录到 RunContext，由 runner 在 SDK 外重新抛出（保持 M2 语义）。"""
     rec = {"tool": tool, "error": str(error), "type": type(error).__name__}
@@ -59,7 +49,7 @@ def _record_tool_error(ctx, tool, error, extra=None):
 
 
 def _run(tool: str, ctx, params: dict):
-    """统一执行体：预算/HITL/去重/tool_calls/trace/events。
+    """统一执行体：预算/去重/tool_calls/trace/events。
 
     说明：本函数运行在 SDK 工具调用内。SDK 对工具异常的处理行为随版本变化
     （可能吞掉转给模型），因此这里**不向 SDK 抛治理类异常**，而是记入
@@ -86,11 +76,6 @@ def _run(tool: str, ctx, params: dict):
     except BudgetExceeded as be:
         _record_tool_error(ctx, tool, be, extra={"kind": be.kind})
         return {"status": "error", "error": str(be)}
-
-    if tw.risk == "high":
-        aid = _request_hitl_for(ticket_id, tool, params, actor, c)
-        return {"status": "needs_approval", "approval_id": aid,
-                "tool": tool, "params": params}
 
     before = _ticket_status(ticket_id)
     if is_duplicate(ticket_id, tool, params):
@@ -164,13 +149,14 @@ _TOOL_ROLES = {
 
 
 def _tool_meta(fn):
-    """返回 {registry 工具名, SDK 工具名, 描述}（去掉包装函数前导下划线）。"""
+    """返回 {注册表工具名, 描述, 风险}（去掉包装函数前导下划线）。"""
     name = fn.__name__.lstrip("_")
     tw = registry.get_tool(name)
     return name, tw.description if tw else "", tw.risk if tw else "low"
 
 
 def build_sdk_tools(role: str) -> list:
+    """按角色返回 SDK 工具；高风险工具使用 needs_approval=True 触发原生中断。"""
     if not _SDK_OK:
         return []
     out = []
@@ -183,5 +169,6 @@ def build_sdk_tools(role: str) -> list:
             name_override=name,
             description_override=f"{desc}（{risk} 风险）",
             use_docstring_info=True,
+            needs_approval=(risk == "high"),
         ))
     return out

@@ -1,7 +1,11 @@
-"""OpenAI Agents SDK 真实链路冒烟：OpenRouter 主链路 + trace 落库 + 工具调用。
+"""OpenAI Agents SDK 真实链路冒烟：OpenRouter + 工具循环 + 原生 HITL 审批恢复。
 
 用法：.venv/bin/python scripts/smoke_agents.py
 要求：已设置 OPENROUTER_API_KEY（.env 或环境变量），可访问 openrouter.ai
+覆盖：
+  1. 低风险知识工单 → SDK 工具循环 → done
+  2. 高风险工单 → SDK 原生中断(interruptions) → awaiting_approval → 审批通过 → 恢复 → done
+  3. trace 落库 + 工具调用记录
 """
 import os
 import sys
@@ -11,46 +15,69 @@ os.environ.setdefault("APP_DB_PATH", "/tmp/agents_smoke.db")
 
 from app.db import init_db
 from app.api.auth import seed_users
-from app.security import create_session
 from app import daos, trace as trace_mod
-from app.orchestrator import run_ticket
+from app.orchestrator import run_ticket, resume_ticket
 from app.skills import kb as _kb, user_dir as _ud, grant as _gr  # noqa: F401 注册工具
 
 
+def _admin_id():
+    import app.db
+    with app.db.session() as conn:
+        return conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()["id"]
+
+
+def _tool_calls(tid):
+    import app.db
+    with app.db.session() as conn:
+        return [dict(x) for x in conn.execute(
+            "SELECT id, tool_name, status FROM tool_calls WHERE ticket_id=?", (tid,)).fetchall()]
+
+
 def main():
+    os.environ["APP_DB_PATH"] = "/tmp/agents_smoke.db"
     init_db()
     seed_users()
-    with __import__("app.db", fromlist=["session"]).session() as conn:
-        admin_id = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()["id"]
-    token = create_session(admin_id)
+    admin_id = _admin_id()
 
-    # 场景：低风险知识工单（走 OpenRouter 真实模型调用）
+    # ---- 场景 1：低风险知识工单 ----
     tid = daos.create_ticket(1, admin_id, "VPN 连接不上如何排查",
                              "用户反馈办公室无法连接公司 VPN，帮忙查知识库给出排查步骤",
                              risk_level="low", intent_type="knowledge")
-    print(f"[创建工单] id={tid}")
     r = run_ticket(tid, actor="admin")
     t = daos.get_ticket(tid)
-    print("[运行结果]", r)
-    print("[工单状态]", t["status"])
-    assert r["status"] == "done", f"工单未完成: {r}"
-    assert t["status"] == "done"
+    print(f"[场景1] id={tid} result={r['status']} status={t['status']}")
+    assert r["status"] == "done" and t["status"] == "done", r
+    print("  工具调用:", _tool_calls(tid))
+    assert len(trace_mod.list_for_ticket(tid)) > 0, "trace 未写入"
 
-    n_trace = len(trace_mod.list_for_ticket(tid))
-    print("[trace 条数]", n_trace)
-    assert n_trace > 0, "trace 未写入"
+    # ---- 场景 2：高风险工单 → SDK 原生中断 → 审批恢复 ----
+    tid2 = daos.create_ticket(1, admin_id, "给 u-1024 开通数据库只读账号",
+                              "为 u-1024 申请数据库只读权限", risk_level="high",
+                              intent_type="change")
+    r2 = run_ticket(tid2, actor="admin")
+    t2 = daos.get_ticket(tid2)
+    print(f"[场景2] result={r2}")
+    assert r2["status"] == "awaiting_approval", r2
+    assert t2["status"] == "awaiting_approval", t2
 
-    calls = []
-    with __import__("app.db", fromlist=["session"]).session() as conn:
-        calls = [dict(x) for x in conn.execute(
-            "SELECT id, tool_name, status, latency_ms, result_json FROM tool_calls WHERE ticket_id=?",
-            (tid,)).fetchall()]
-    print("[工具调用]", calls)
+    ap_list = r2["approvals"]
+    assert ap_list, "无审批记录"
+    aid = ap_list[0]["approval_id"]
+    print("  审批单:", {**dict(daos.get_approval(aid))})
+    assert daos.get_approval(aid)["status"] == "pending"
 
+    # 审批通过并恢复（走 SDK resume）
+    daos.decide_approval(aid, "approved", "operator", "同意")
+    r2b = resume_ticket(tid2, aid, actor="operator")
+    t2b = daos.get_ticket(tid2)
+    print(f"[场景2 恢复] result={r2b}")
+    assert r2b["status"] == "done", r2b
+    assert t2b["status"] == "done", t2b
+
+    print("\n场景1 trace:")
     for tr in trace_mod.list_for_ticket(tid):
-        print("  trace>", tr["provider"], tr["model"], "|", tr["context_source"],
-              "|", str(tr["io_json"])[:120])
-
+        print("  ", tr["provider"], tr["model"], "|", tr["context_source"], "|", str(tr["io_json"])[:100])
+    print("场景2 trace:", len(trace_mod.list_for_ticket(tid2)), "条")
     print("\nAGENTS SMOKE OK")
 
 

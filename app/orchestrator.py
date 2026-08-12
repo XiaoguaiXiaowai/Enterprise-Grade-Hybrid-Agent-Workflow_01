@@ -60,9 +60,49 @@ def _request_hitl(ticket_id, tool, params, actor) -> int:
     return aid
 
 
-def resume_ticket(ticket_id: int, approval_id: int, actor: str = "system"):
-    """HITL 审批通过后，从快照恢复执行待审批的高危工具。"""
+def resume_ticket(ticket_id: int, approval_id: int, actor: str = "system", decision="approve"):
+    """HITL 审批后恢复执行。
+
+    - SDK 路径生成的审批：委托 agents_runner 用原生 RunState 恢复/驳回，
+      恢复完成（done/awaiting）后补上状态机收敛
+    - 传统路径生成的审批：走旧 _run_loop 的抓取-执行恢复
+    """
+    if agents_runner.sdk_ok() and approval_id in agents_runner._PENDING:
+        r = agents_runner.resume_run(approval_id, decision, rejection_message=None)
+        if r["status"] in ("done", "awaiting_approval"):
+            _finalize_after_sdk_resume(ticket_id, r, actor)
+        return r
     return _run_loop(ticket_id, actor, resume_approval_id=approval_id)
+
+
+def _finalize_after_sdk_resume(ticket_id, r, actor):
+    """SDK resume 完成后补状态机收敛（resume_run 本身不碰状态机）。
+
+    注意状态机不允许 awaiting_approval → done 直跳，需经 gathering → agent_running → done。
+    """
+    ticket = daos.get_ticket(ticket_id)
+    if not ticket:
+        return
+    from .state_machine import can_transition
+    if r["status"] == "done":
+        _walk_transitions(ticket_id, ["gathering", "agent_running", "done"],
+                          actor, "收敛: 审批恢复完成")
+        daos.add_event(ticket_id, "deliver", {"summary": r.get("final_output", "")}, actor)
+        _record_metrics(ticket_id, ticket["intent_type"], success=True)
+    elif r["status"] == "awaiting_approval":
+        # 恢复后又触发新的中断 → 回到 gathering 并留在 agent_running? 保持 awaiting_approval
+        _walk_transitions(ticket_id, ["gathering"], actor, reason="HITL 中断(后续)")
+
+
+def _walk_transitions(ticket_id, targets, actor, reason="", force_done=True):
+    """按目标序列逐个路径转移（跳过非法/已处于的目标），直到停留在最后一个目标。"""
+    from .state_machine import can_transition
+    for to in targets:
+        ticket = daos.get_ticket(ticket_id)
+        if ticket["status"] == to:
+            continue
+        if can_transition(ticket["status"], to):
+            daos.transition(ticket_id, to, actor, reason=reason)
 
 
 def run_ticket(ticket_id: int, actor: str = "system"):
@@ -110,15 +150,21 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                           bypass_hitl=True)
         elif agents_runner.sdk_ok():
             try:
-                final_output, provider_used, model_used = agents_runner.run_sdk(
+                sdk_result = agents_runner.run_sdk(
                     ticket_id, ctx, actor, budget, routing, req_id=req_id)
             except agents_runner.SdkUnavailable:
                 # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
                 _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
             else:
+                if sdk_result["status"] == "awaiting_approval":
+                    daos.transition(ticket_id, "awaiting_approval", actor, reason="HITL 中断(SDK)")
+                    _record_metrics(ticket_id, ticket["intent_type"], human_takeover=True)
+                    return {"status": "awaiting_approval",
+                            "approvals": sdk_result["approvals"]}
                 daos.add_event(ticket_id, "model_call",
-                               {"content": final_output, "provider": provider_used,
-                                "model": model_used}, actor)
+                               {"content": sdk_result["final_output"],
+                                "provider": sdk_result["provider"],
+                                "model": sdk_result["model"]}, actor)
         else:
             _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
 

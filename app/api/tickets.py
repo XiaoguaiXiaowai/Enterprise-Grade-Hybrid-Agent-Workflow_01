@@ -117,9 +117,13 @@ def approve(body: ApproveIn, ticket_id: int, ctx: dict = Depends(require_role("o
         raise HTTPException(status_code=400, detail="该审批已被处理")
     if body.decision == "reject":
         _daos.decide_approval(body.approval_id, "rejected", ctx["username"], body.reason)
-        return {"status": "rejected"}
+        # SDK 原生审批也需恢复 run 以便 Agent 得知被驳回并调整策略
+        result = resume_ticket(ticket_id, body.approval_id,
+                               actor=ctx["username"], decision="reject")
+        return {"status": "rejected", "run": result}
     _daos.decide_approval(body.approval_id, "approved", ctx["username"], body.reason)
-    result = resume_ticket(ticket_id, body.approval_id, actor=ctx["username"])
+    result = resume_ticket(ticket_id, body.approval_id,
+                           actor=ctx["username"], decision="approve")
     return {"decision": "approved", "run": result}
 
 
