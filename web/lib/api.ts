@@ -53,8 +53,14 @@ export function createTicket(body: any) {
 export function listTickets() {
   return req<any[]>("/api/tickets");
 }
+export function listAllTickets() {
+  return req<any[]>("/api/tickets/all");
+}
 export function getTicket(id: number) {
   return req<any>(`/api/tickets/${id}`);
+}
+export function getConversation(id: number) {
+  return req<any[]>(`/api/tickets/${id}/conversation`);
 }
 export function runTicket(id: number) {
   return req<any>(`/api/tickets/${id}/run`, { method: "POST" });
@@ -75,12 +81,18 @@ export function getMetrics() {
   return req<any>("/api/metrics");
 }
 
-// SSE：工单事件流（EventSource 无法带自定义 header，token 经 query 传递）
-export function subscribeEvents(ticketId: number, onEvent: (e: any) => void): () => void {
+// 基于 WebSocket 实时订阅工单事件流（先回放历史事件，再增量推送；token 经 query 传递）
+export function subscribeTicketWS(ticketId: number, onEvent: (e: any) => void): () => void {
   const token = getToken() || "";
-  const es = new EventSource(`${API}/api/tickets/${ticketId}/events?token=${encodeURIComponent(token)}`);
-  es.onmessage = (msg) => {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  // 若配置了 API 基址（跨源部署），则把 WS 指向该源；否则同源反代
+  const host = API ? API.replace(/^https?:\/\//, "").replace(/\/$/, "")
+                   : window.location.host;
+  const url = `${proto}//${host}/api/tickets/${ticketId}/ws?token=${encodeURIComponent(token)}`;
+  const ws = new WebSocket(url);
+  ws.onmessage = (msg) => {
     try { onEvent(JSON.parse(msg.data)); } catch { /* ignore */ }
   };
-  return () => es.close();
+  return () => { try { ws.close(); } catch { /* ignore */ } };
 }
+

@@ -1,7 +1,8 @@
-"""工单路由：CRUD + 触发运行 + 事件/SSE。租户隔离 + RBAC。"""
+"""工单路由：CRUD + 触发运行 + 事件/SSE + 对话记录。租户隔离 + RBAC。"""
+import asyncio
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,13 @@ def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
 
 @router.get("")
 def list_tickets(ctx: dict = Depends(current_user)):
+    # 工单列表仅展示当前登录用户创建/归属的个人工单
+    return daos.list_tickets(ctx["tenant_id"], requester_id=ctx["user_id"])
+
+
+@router.get("/all")
+def list_all_tickets(ctx: dict = Depends(require_role("operator", "admin"))):
+    """审批台/治理所需：列出全部工单（仅运维/管理员可见）。"""
     return daos.list_tickets(ctx["tenant_id"])
 
 
@@ -83,6 +91,17 @@ def run(ticket_id: int, ctx: dict = Depends(current_user)):
     return result
 
 
+@router.get("/{ticket_id}/conversation")
+def conversation(ticket_id: int, ctx: dict = Depends(current_user)):
+    """工单内容模块所需：按时间顺序返回工单全部对话记录。"""
+    row = daos.get_ticket(ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    if row["tenant_id"] != ctx["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权访问")
+    return [dict(e) for e in daos.list_events(ticket_id)]
+
+
 @router.get("/{ticket_id}/events")
 def events(ticket_id: int, token: str | None = None):
     # 兼容 EventSource（无法带自定义 header）——允许经 query token 复用会话
@@ -92,14 +111,63 @@ def events(ticket_id: int, token: str | None = None):
     row = daos.get_ticket(ticket_id)
     if row is None or row["tenant_id"] != ctx["tenant_id"]:
         raise HTTPException(status_code=404, detail="工单不存在")
-    evts = daos.list_events(ticket_id)
+    # 实时流式推送：先返回已存在事件，再长轮询等待新事件附加到 SSE。
+    cur = daos.list_events(ticket_id)
+    cursor = cur[-1]["id"] if cur else 0
 
     def gen():
-        for e in evts:
+        for e in cur:
             payload = json.loads(e["payload_json"] or "{}")
             yield f"data: {json.dumps({'type': e['event_type'], 'at': e['created_at'], 'payload': payload}, ensure_ascii=False)}\n\n"
+        nonlocal_cursor = cursor
+        try:
+            while True:
+                rows = daos.list_events_after(ticket_id, nonlocal_cursor)
+                if rows:
+                    nonlocal_cursor = rows[-1]["id"]
+                    for e in rows:
+                        payload = json.loads(e["payload_json"] or "{}")
+                        yield f"data: {json.dumps({'type': e['event_type'], 'at': e['created_at'], 'payload': payload}, ensure_ascii=False)}\n\n"
+                else:
+                    asyncio.sleep(0.3)
+        except asyncio.CancelledError:
+            return
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.websocket("/{ticket_id}/ws")
+async def ws_events(websocket: WebSocket, ticket_id: int, token: str | None = None):
+    """WebSocket 实时推送工单事件流：先回放已有事件，再增量推送新的流程事件。
+
+    token 经 query 传入（浏览器 WebSocket 无法自定义 header）。
+    """
+    ctx = resolve_token(token) if token else None
+    if ctx is None:
+        await websocket.close(code=4401)
+        return
+    row = daos.get_ticket(ticket_id)
+    if row is None or row["tenant_id"] != ctx["tenant_id"]:
+        await websocket.close(code=4404)
+        return
+    await websocket.accept()
+    cursor = 0
+    for e in daos.list_events(ticket_id):
+        payload = json.loads(e["payload_json"] or "{}")
+        await websocket.send_json({"type": e["event_type"], "at": e["created_at"], "payload": payload})
+        cursor = e["id"]
+    try:
+        while True:
+            rows = daos.list_events_after(ticket_id, cursor)
+            if rows:
+                cursor = rows[-1]["id"]
+                for e in rows:
+                    payload = json.loads(e["payload_json"] or "{}")
+                    await websocket.send_json({"type": e["event_type"], "at": e["created_at"], "payload": payload})
+            else:
+                await asyncio.sleep(0.3)
+    except WebSocketDisconnect:
+        return
 
 
 class ApproveIn(BaseModel):

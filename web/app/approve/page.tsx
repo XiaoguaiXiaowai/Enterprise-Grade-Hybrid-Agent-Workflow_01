@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Nav from "@/components/Nav";
-import { listTickets, getApprovals, approve, getToken } from "@/lib/api";
+import { listAllTickets, getApprovals, approve, getToken } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 export default function Approve() {
@@ -11,7 +11,7 @@ export default function Approve() {
 
   const refresh = useCallback(async () => {
     try {
-      const tickets = await listTickets();
+      const tickets = await listAllTickets();
       const list: any[] = [];
       for (const t of tickets) {
         if (t.status !== "awaiting_approval") continue;

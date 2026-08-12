@@ -30,3 +30,20 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bor
 .nav { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
 .nav a { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); }
 .nav a:hover { border-color: var(--accent); }
+
+/* 工单台：列表 + 工单内容聊天窗口 */
+.ticket-layout { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
+.ticket-list-panel table tr.active { background: #1e3a5f; }
+.chat-panel { display: flex; flex-direction: column; min-height: 520px; }
+.chat-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.chat-area { flex: 1; overflow-y: auto; max-height: 420px; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; margin-bottom: 14px; }
+.chat-msg { display: flex; flex-direction: column; max-width: 82%; }
+.chat-msg.user { align-self: flex-end; align-items: flex-end; }
+.chat-msg.assistant, .chat-msg.system { align-self: flex-start; }
+.chat-bubble { padding: 9px 12px; border-radius: 10px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+.chat-msg.user .chat-bubble { background: var(--accent); color: #0f172a; }
+.chat-msg.assistant .chat-bubble { background: #334155; color: var(--text); }
+.chat-msg.system .chat-bubble { background: transparent; border: 1px dashed var(--border); color: var(--muted); font-size: 12px; }
+.chat-at { font-size: 11px; margin-top: 3px; }
+.chat-form { display: flex; flex-direction: column; gap: 10px; }
+.chat-form input[disabled], .chat-form textarea[disabled] { opacity: 0.55; cursor: not-allowed; }

@@ -23,12 +23,19 @@ def get_ticket(ticket_id):
         return conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
 
 
-def list_tickets(tenant_id, limit=50):
+def list_tickets(tenant_id, limit=50, requester_id=None):
+    """列出工单。requester_id 非空时仅返回该用户创建/归属的个人工单。"""
     with session() as conn:
-        rows = conn.execute(
-            "SELECT * FROM tickets WHERE tenant_id = ? ORDER BY id DESC LIMIT ?",
-            (tenant_id, limit),
-        ).fetchall()
+        if requester_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM tickets WHERE tenant_id = ? AND requester_id = ? ORDER BY id DESC LIMIT ?",
+                (tenant_id, requester_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM tickets WHERE tenant_id = ? ORDER BY id DESC LIMIT ?",
+                (tenant_id, limit),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -70,5 +77,15 @@ def list_events(ticket_id):
     with session() as conn:
         rows = conn.execute(
             "SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY id ASC", (ticket_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_events_after(ticket_id, after_id=0):
+    """返回 id 大于 after_id 的新事件（用于 SSE 实时流式推送）。"""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ticket_events WHERE ticket_id = ? AND id > ? ORDER BY id ASC",
+            (ticket_id, after_id),
         ).fetchall()
         return [dict(r) for r in rows]
