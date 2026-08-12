@@ -16,6 +16,8 @@ from .context_assembler import assemble, render
 from .guards import is_duplicate, should_stop, fingerprint
 from .llm_gateway import get_llm
 from .model_router import route
+from . import agents_runner
+agents_runner.atrace.install()  # 幂等：把 SDK trace 重定向到本地 SQLite
 from .skills import registry
 from .skills import kb as _kb, user_dir as _ud, grant as _gr  # noqa: F401 注册工具
 
@@ -106,6 +108,17 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
             _execute_tool(ticket_id, resume_call["tool"], resume_call["params"],
                           actor, budget, req_id, llm.provider, llm.name,
                           bypass_hitl=True)
+        elif agents_runner.sdk_ok():
+            try:
+                final_output, provider_used, model_used = agents_runner.run_sdk(
+                    ticket_id, ctx, actor, budget, routing, req_id=req_id)
+            except agents_runner.SdkUnavailable:
+                # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
+                _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
+            else:
+                daos.add_event(ticket_id, "model_call",
+                               {"content": final_output, "provider": provider_used,
+                                "model": model_used}, actor)
         else:
             _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
 
