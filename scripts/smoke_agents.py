@@ -5,7 +5,8 @@
 覆盖：
   1. 低风险知识工单 → SDK 工具循环 → done
   2. 高风险工单 → SDK 原生中断(interruptions) → awaiting_approval → 审批通过 → 恢复 → done
-  3. trace 落库 + 工具调用记录
+  3. 多 Agent handoff：trace 应含 TriageAgent 与对应子 Agent 的 agent span
+  4. trace 落库 + 工具调用记录
 """
 import os
 import sys
@@ -33,6 +34,23 @@ def _tool_calls(tid):
             "SELECT id, tool_name, status FROM tool_calls WHERE ticket_id=?", (tid,)).fetchall()]
 
 
+def _assert_agents_traced(tid, expected):
+    """断言 SDK trace 的 agent span 中含期望的 Agent 名（验证 handoff 多 Agent 链路）。"""
+    import json as _json
+    found = set()
+    for tr in trace_mod.list_for_ticket(tid):
+        try:
+            io = _json.loads(tr["io_json"] or "{}")
+        except Exception:
+            continue
+        for sp in io.get("spans", []):
+            if sp.get("type") == "agent" and sp.get("name"):
+                found.add(sp["name"])
+    missing = [e for e in expected if e not in found]
+    print(f"  已 trace 的 Agent: {sorted(found)}")
+    assert not missing, f"期望的 Agent span 未出现: {missing}"
+
+
 def main():
     os.environ["APP_DB_PATH"] = "/tmp/agents_smoke.db"
     init_db()
@@ -49,6 +67,7 @@ def main():
     assert r["status"] == "done" and t["status"] == "done", r
     print("  工具调用:", _tool_calls(tid))
     assert len(trace_mod.list_for_ticket(tid)) > 0, "trace 未写入"
+    _assert_agents_traced(tid, ("TriageAgent", "KnowledgeAgent"))
 
     # ---- 场景 2：高风险工单 → SDK 原生中断 → 审批恢复 ----
     tid2 = daos.create_ticket(1, admin_id, "给 u-1024 开通数据库只读账号",
@@ -73,6 +92,7 @@ def main():
     print(f"[场景2 恢复] result={r2b}")
     assert r2b["status"] == "done", r2b
     assert t2b["status"] == "done", t2b
+    _assert_agents_traced(tid2, ("TriageAgent", "ChangeAgent"))
 
     print("\n场景1 trace:")
     for tr in trace_mod.list_for_ticket(tid):

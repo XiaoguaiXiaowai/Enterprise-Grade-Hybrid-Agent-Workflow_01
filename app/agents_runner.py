@@ -24,22 +24,24 @@ from .config import settings
 from .context_assembler import render
 from . import trace as trace_mod
 
-_SYSTEM = (
-    "你是企业 IT 工单处理 Agent。依据上下文逐步规划并调用工具完成任务。"
-    "每一步先判断是否需要工具：能直接回答就结束；需要数据就调用对应工具。"
-    "注意：高风险工具（如开通/回收权限）必须在规划完成时直接调用，系统会在真正执行前"
-    "暂停并向审批人征得同意（HITL 审批由系统处理），因此不要只描述风险而不调用工具。"
-    "完成时明确输出最终结论。不要调用未在白名单中的工具。"
-)
-
-
 def sdk_ok() -> bool:
     return ap.sdk_available() and at._SDK_OK
 
 
-def _build_agent(instructions, tools, model):
-    from agents import Agent  # 运行期导入
-    return Agent(name="IT Ticket Agent", instructions=instructions, tools=tools, model=model)
+def _build_agent_group(routing, role: str, fallback_ollama=False) -> "object":
+    """构建多 Agent 组（triage+handoffs），返回 triage 入口 Agent。
+
+    fallback_ollama=True 时所有子 Agent 的模型替换为 Ollama（兜底链路）。
+    """
+    from . import agents_defs as defs
+
+    def model_fn(_name):
+        if fallback_ollama:
+            return ap.build_fallback_model()
+        return _model_name(routing)
+
+    triage, _ = defs.build_agent_group(role, model_fn)
+    return triage
 
 
 def _run(agent, input, run_config, run_ctx=None, max_turns=25):
@@ -112,11 +114,14 @@ def _handle_done(ticket_id, result, routing, req_id, run_ctx, budget):
             "provider": routing["provider"], "model": routing["model"]}
 
 
-def _handle_interruptions(ticket_id, result, routing, req_id, run_ctx, budget):
-    """有中断：为每个 ToolApprovalItem 落库审批并保存 RunState 供恢复。"""
+def _handle_interruptions(ticket_id, result, routing, req_id, run_ctx, budget, entry_agent):
+    """有中断：为每个 ToolApprovalItem 落库审批并保存 RunState 供恢复。
+
+    多 Agent 下用 entry_agent（triage）作为恢复入口，RunState 内含 agent map。
+    """
     from . import daos  # 运行期导入
     state = result.to_state()
-    agent = result.last_agent
+    agent = entry_agent or result.last_agent
     approvals = []
     actor = (run_ctx or {}).get("actor", "system")
     for item in result.interruptions:
@@ -134,11 +139,12 @@ def _handle_interruptions(ticket_id, result, routing, req_id, run_ctx, budget):
     return {"status": "awaiting_approval", "approvals": approvals}
 
 
-def _process_result(ticket_id, result, routing, req_id, run_ctx, budget):
+def _process_result(ticket_id, result, routing, req_id, run_ctx, budget, entry_agent=None):
     run_ctx = run_ctx or {}
     _raise_governance(run_ctx)
     if result.interruptions:
-        return _handle_interruptions(ticket_id, result, routing, req_id, run_ctx, budget)
+        return _handle_interruptions(ticket_id, result, routing, req_id, run_ctx,
+                                     budget, entry_agent)
     return _handle_done(ticket_id, result, routing, req_id, run_ctx, budget)
 
 
@@ -150,16 +156,15 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
                "actor_role": actor_role(actor), "budget": budget,
                "state_before": ctx["state"]}
     run_config = _make_run_config(ticket_id, ctx, req_id, routing, actor)
-    tools = at.build_sdk_tools(actor_role(actor))
-    agent = _build_agent(_SYSTEM, tools, _model_name(routing))
+    agent = _build_agent_group(routing, actor_role(actor))
 
     try:
         result = _run(agent, user_input, run_config, run_ctx, max_turns=budget.max_steps)
     except Exception as e:
         if routing["provider"] == "openrouter":
             try:
-                fb_tools = at.build_sdk_tools(actor_role(actor))
-                fb_agent = _build_agent(_SYSTEM, fb_tools, ap.build_fallback_model())
+                fb_agent = _build_agent_group(routing, actor_role(actor),
+                                              fallback_ollama=True)
                 result = _run(fb_agent, user_input, run_config, run_ctx,
                               max_turns=budget.max_steps)
                 routing = {**routing, "provider": "ollama",
@@ -170,7 +175,7 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
         else:
             raise RuntimeError(f"Agent 执行失败: {e}") from e
 
-    return _process_result(ticket_id, result, routing, req_id, run_ctx, budget)
+    return _process_result(ticket_id, result, routing, req_id, run_ctx, budget, entry_agent=agent)
 
 
 def resume_run(approval_id: int, decision: str, rejection_message: str | None = None):
@@ -198,7 +203,8 @@ def resume_run(approval_id: int, decision: str, rejection_message: str | None = 
                                   (run_ctx or {}).get("actor", "system"))
     _PENDING.pop(approval_id, None)
     result = _run(agent, state, run_config, None, max_turns=max_turns)
-    return _process_result(ticket_id, result, routing, req_id, run_ctx, budget)
+    return _process_result(ticket_id, result, routing, req_id, run_ctx, budget,
+                           entry_agent=agent)
 
 
 class SdkUnavailable(RuntimeError):

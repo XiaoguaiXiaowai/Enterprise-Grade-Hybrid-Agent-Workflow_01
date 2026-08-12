@@ -5,7 +5,7 @@
 
 - 📋 **面试用**：《[面试文档](doc/面试文档.md)》（30 秒介绍 + 10 分钟演示脚本 + 能力讲法 + QA 预案）
 - 详细开发文档：请见 [`doc/开发文档.md`](doc/开发文档.md)
-- 进度说明：**M1 骨架完成 ✓ · M2 Harness 内核完成 ✓ · M3 前端/知识库/部署完成 ✓**（各阶段说明见 `M1_README.md` · `M2_README.md` · `M3_README.md`）
+- 进度说明：**M1 骨架 ✓ · M2 Harness 内核 ✓ · M3 前端/知识库/部署 ✓ · M4 OpenAI Agents SDK 演进 ✓**（各阶段见 `M1_README.md` · `M2_README.md` · `M3_README.md` · `M4_README.md`）
 - 学习笔记原文：[`doc/学习笔记.md`](doc/学习笔记.md)
 
 ---
@@ -16,7 +16,7 @@
 员工提交 IT 工单（查权限 / 开通账号 / 排查故障 / 改配置）
         │
         ▼
-  企业级 Agent Harness（自研，非 LangGraph）
+  企业级 Agent Harness（治理层自研 + LLM 循环用 OpenAI Agents SDK）
         │  —— 可靠：状态机约束、幂等、预算、停止条件
         │  —— 可控：IAM 最小权限、工具白名单、HITL 审批
         │  —— 可审计：Trace 全链路回放、监控指标
@@ -24,7 +24,7 @@
   关闭工单并交付（审批通过 / 自动收敛 / 归档存档）
 ```
 
-**一句话讲稿**：我把"单体大模型应用"拆成了**受控规则层（Harness）+ 智能层（LLM）**，让大模型只负责判断，把执行权交给确定性的流程与审批。
+**一句话讲稿**：我把"单体大模型应用"拆成了**受控规则层（Harness）+ 智能层（LLM）**，让大模型只负责判断，把执行权交给确定性的流程与审批；LLM 循环交由 OpenAI Agents SDK 编排（triage → 子 Agent handoff），治理层（状态机/审批/预算/Trace）仍由自研 Harness 掌控。
 
 ---
 
@@ -44,15 +44,15 @@ flowchart TB
         mon[监控看板 + Trace 回放]
     end
 
-    subgraph harness["Agent Harness 内核（自研 Python）"]
-        orch[编排器 orchestrator<br/>状态机 · LOOP]
-        cta[上下文装配 context_assembler<br/>选 / 压 / 截 + 结构化]
-        router[模型路由 model_router]
-        llm[LLM 网关<br/>OpenAI SDK ⇄ Ollama]
+    subgraph harness["Agent Harness 内核（自研治理层 + OpenAI Agents SDK）"]
+        orch[编排器 orchestrator<br/>状态机 · 入口]
+        agents[agents_runner<br/>OpenAI Agents SDK<br/>Agent + Runner]
+        multi[多 Agent 编排 agents_defs<br/>Triage → 子 Agent handoff]
+        hitl[原生 HITL 中断<br/>needs_approval · RunState 恢复]
+        router[模型路由 model_router<br/>RouterProvider  OpenRouter⇄Ollama]
         guard[守卫 guards<br/>重试 · 停止 · 重复检测]
         budget[预算 budget<br/>步数 / Token / 时间]
         skills[工具层 MPC-Skill<br/>白名单 · 参数校验 · 脱敏 · HITL · 幂等]
-        hello[四项安全约束<br/>IAM凭证 / Schema校验 / 幂等状态机 / HITL]
     end
 
     subgraph memory["记忆五分层"]
@@ -74,10 +74,12 @@ flowchart TB
     auth --> risk
     risk --> api
     api --> orch
-    orch --> cta --> llm
-    router --> llm
+    orch --> agents
+    agents --> multi
+    agents --> hitl
+    router --> agents
     orch --> guard --> budget
-    orch --> skills --> hello
+    orch --> skills
     skills --> memory
     orch --> memory
     memory --> data
@@ -173,7 +175,7 @@ mindmap
 |---|---|---|
 | 后端 | Python + FastAPI | 轻量、结构化、面试可逐行讲解 |
 | Workflow | 自研状态机 | 不用 LangGraph，快照/HITL 原理可控可讲 |
-| LLM | OpenAI SDK ⇄ Ollama | 统一 `/v1/chat/completions`，一个开关切换 |
+| LLM 编排 | OpenAI Agents SDK（OpenRouter 主 ⇄ Ollama 兜底） | `agent+Runner` 原生工具循环/多 Agent handoff；`RouterProvider` 统一 Chat Completions |
 | 存储 | SQLite + 文件系统 | 单机、0 成本、状态外部化 |
 | 前端 | Next.js 14 (App Router) | 贴近真实企业栈，与 FastAPI 解耦，面试加分 |
 | 部署 | Docker Compose + Nginx + HTTPS | 阿里云 Ubuntu 单机零成本上线 |

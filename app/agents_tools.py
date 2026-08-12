@@ -155,20 +155,36 @@ def _tool_meta(fn):
     return name, tw.description if tw else "", tw.risk if tw else "low"
 
 
-def build_sdk_tools(role: str) -> list:
-    """按角色返回 SDK 工具；高风险工具使用 needs_approval=True 触发原生中断。"""
+def _wrap_tool(fn):
+    name, desc, risk = _tool_meta(fn)
+    return function_tool(
+        fn,
+        name_override=name,
+        description_override=f"{desc}（{risk} 风险）",
+        use_docstring_info=True,
+        needs_approval=(risk == "high"),
+    )
+
+
+def build_agent_tools(role: str, names) -> list:
+    """按角色+工具名返回过滤后的 SDK 工具；高风险工具 needs_approval=True。"""
     if not _SDK_OK:
         return []
+    want = set(names)
     out = []
     for fn in _SDK_TOOLS:
-        name, desc, risk = _tool_meta(fn)
+        name, _, _ = _tool_meta(fn)
+        if name not in want:
+            continue
         if role not in _TOOL_ROLES.get(name, ()):
             continue
-        out.append(function_tool(
-            fn,
-            name_override=name,
-            description_override=f"{desc}（{risk} 风险）",
-            use_docstring_info=True,
-            needs_approval=(risk == "high"),
-        ))
+        out.append(_wrap_tool(fn))
     return out
+
+
+def build_sdk_tools(role: str) -> list:
+    """按角色返回全部 SDK 工具（兼容旧入口/兜底链路）。"""
+    if not _SDK_OK:
+        return []
+    return [_wrap_tool(fn) for fn in _SDK_TOOLS
+            if role in _TOOL_ROLES.get(_tool_meta(fn)[0], ())]
