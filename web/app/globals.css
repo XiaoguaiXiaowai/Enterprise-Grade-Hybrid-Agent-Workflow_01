@@ -7,7 +7,7 @@
 body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--bg); color: var(--text); }
 a { color: var(--accent); text-decoration: none; }
-.container { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+.container { max-width: 1280px; margin: 0 auto; padding: 24px 16px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .muted { color: var(--muted); font-size: 13px; }
@@ -20,24 +20,42 @@ button.ok { background: var(--ok); }
 button.err { background: var(--err); color: #fff; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
 .badge.low { background: #064e3b; color: var(--ok); }
 .badge.medium { background: #78350f; color: var(--warn); }
 .badge.high { background: #7f1d1d; color: var(--err); }
 .badge.done { background: #064e3b; color: var(--ok); }
 .badge.awaiting_approval { background: #78350f; color: var(--warn); }
 .badge.failed { background: #7f1d1d; color: var(--err); }
+.badge.processing { background: #1e3a5f; color: var(--accent); }
 .nav { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
 .nav a { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); }
 .nav a:hover { border-color: var(--accent); }
 
-/* 工单台：列表 + 工单内容聊天窗口 */
-.ticket-layout { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
-.ticket-list-panel table tr.active { background: #1e3a5f; }
-.chat-panel { display: flex; flex-direction: column; min-height: 520px; }
+/* 工单台：左列表 + 右对话 */
+.ticket-layout { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: stretch; }
+
+/* --- 左栏：搜索 + 筛选 Tab + 卡片列表 --- */
+.ticket-list-panel { display: flex; flex-direction: column; gap: 12px; margin-bottom: 0; max-height: calc(100vh - 160px); }
+.ticket-search { width: 100%; }
+.filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.filter-tabs button { padding: 4px 10px; font-size: 12px; background: #0b1222; color: var(--muted); border: 1px solid var(--border); }
+.filter-tabs button.on { background: var(--accent); color: #0f172a; }
+.ticket-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 0 -6px; padding: 0 6px; }
+.ticket-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; background: #0b1222; }
+.ticket-card:hover { border-color: var(--accent); }
+.ticket-card.active { background: #1e3a5f; border-color: var(--accent); }
+.ticket-card .tc-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ticket-card .tc-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; }
+
+/* --- 右栏：详情头 + 对话 + 底部状态条 --- */
+.chat-panel { display: flex; flex-direction: column; margin-bottom: 0; height: calc(100vh - 160px); }
+.detail-head { border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
+.detail-head .dh-title { font-size: 16px; font-weight: 700; margin: 0 0 6px; word-break: break-word; }
+.detail-head .dh-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .chat-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
-.chat-area { flex: 1; overflow-y: auto; max-height: 420px; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; margin-bottom: 14px; }
-.chat-msg { display: flex; flex-direction: column; max-width: 82%; }
+.chat-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; margin-bottom: 12px; }
+.chat-msg { display: flex; flex-direction: column; max-width: 88%; }
 .chat-msg.user { align-self: flex-end; align-items: flex-end; }
 .chat-msg.assistant, .chat-msg.system { align-self: flex-start; }
 .chat-bubble { padding: 9px 12px; border-radius: 10px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
@@ -45,5 +63,34 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bor
 .chat-msg.assistant .chat-bubble { background: #334155; color: var(--text); }
 .chat-msg.system .chat-bubble { background: transparent; border: 1px dashed var(--border); color: var(--muted); font-size: 12px; }
 .chat-at { font-size: 11px; margin-top: 3px; }
-.chat-form { display: flex; flex-direction: column; gap: 10px; }
-.chat-form input[disabled], .chat-form textarea[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+/* 结构化事件卡片 */
+.tool-card, .hitl-card, .deliver-card { align-self: flex-start; width: 100%; max-width: 640px; border-radius: 10px; font-size: 13px; }
+.tool-card { border: 1px solid var(--border); background: #0b1222; overflow: hidden; }
+.tool-card summary { cursor: pointer; padding: 8px 12px; list-style: none; display: flex; gap: 8px; align-items: center; }
+.tool-card summary::-webkit-details-marker { display: none; }
+.tool-card[open] summary { border-bottom: 1px solid var(--border); }
+.tool-card .tc-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.tool-card .tc-kv { background: var(--panel); border-radius: 8px; padding: 8px 10px; }
+.tool-card .tc-kv .tc-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.tool-card pre { margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+.hitl-card { border: 1px solid var(--warn); background: rgba(251, 191, 36, 0.08); padding: 10px 12px; color: var(--warn); }
+.hitl-card .muted { color: rgba(251, 191, 36, 0.7); }
+.deliver-card { border: 1px solid var(--ok); background: rgba(52, 211, 153, 0.08); padding: 10px 12px; color: var(--ok); }
+
+/* 底部状态条 */
+.chat-foot { border-top: 1px solid var(--border); padding-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 44px; }
+
+/* --- 新建工单 Modal --- */
+.modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.7); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: min(520px, calc(100vw - 32px)); }
+.modal h3 { margin: 0 0 16px; }
+.modal form { display: flex; flex-direction: column; gap: 12px; }
+.modal label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: block; }
+.modal .m-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+
+@media (max-width: 900px) {
+  .ticket-layout { grid-template-columns: 1fr; }
+  .ticket-list-panel { max-height: 260px; }
+  .chat-panel { height: calc(100vh - 300px); min-height: 420px; }
+}
