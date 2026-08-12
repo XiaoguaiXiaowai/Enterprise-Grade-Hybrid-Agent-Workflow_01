@@ -11,6 +11,7 @@ from ..deps import current_user, require_role
 from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
+from ..classifier import classify
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -47,14 +48,17 @@ def _serialize(row) -> dict:
 
 @router.post("", response_model=TicketOut)
 def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
-    risk = body.risk_level if body.risk_level in RISK_LEVELS else "low"
-    intent = body.intent_type if body.intent_type in INTENTS else "knowledge"
+    # 意图/风险交由后端 LLM 自动判定（离线时退化为规则兜底），不再由前端指定
+    cls = classify(body.title, body.description)
+    risk = cls["risk_level"] if cls["risk_level"] in RISK_LEVELS else "low"
+    intent = cls["intent_type"] if cls["intent_type"] in INTENTS else "knowledge"
     tid = daos.create_ticket(
         tenant_id=ctx["tenant_id"], requester_id=ctx["user_id"],
         title=body.title, description=body.description,
         risk_level=risk, intent_type=intent, priority=body.priority,
     )
-    daos.add_event(tid, "created", {"title": body.title}, ctx["username"])
+    daos.add_event(tid, "created",
+                   {"title": body.title, "classified": cls}, ctx["username"])
     return _serialize(daos.get_ticket(tid))
 
 

@@ -21,14 +21,27 @@ const INTENT_LABEL: Record<string, string> = {
 };
 const IN_PROGRESS = ["created", "triaged", "gathering", "agent_running", "running"];
 
+// 解析为北京时间并显示。后端以 UTC 存储（形如 "2026-08-12 09:12:45"，无时区后缀），
+// 这里统一按 UTC 解析再换算成 Asia/Shanghai（北京时间）展示。
+const BEIJING_TZ = "Asia/Shanghai";
+
+function toBeijingMs(iso?: string): number | null {
+  if (!iso) return null;
+  // 数据库里是 "YYYY-MM-DD HH:MM:SS" 无时区 → 视为 UTC
+  let s = iso.trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(" ", "T") + "Z";
+  const t = new Date(s).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
 function fmtTime(iso?: string): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
+  const t = toBeijingMs(iso);
+  if (t === null) return "";
   const d = Date.now() - t;
-  if (d < 60_000) return "刚刚";
-  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`;
-  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} 小时前`;
-  return new Date(iso).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  if (d >= 0 && d < 60_000) return "刚刚";
+  if (d >= 0 && d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`;
+  if (d >= 0 && d < 86_400_000) return `${Math.floor(d / 3_600_000)} 小时前`;
+  return new Date(t).toLocaleString("zh-CN", { timeZone: BEIJING_TZ, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function safeParse(s: string): any {
@@ -104,7 +117,7 @@ function MsgView({ m }: { m: Msg }) {
 
 export default function Tickets() {
   const [tickets, setTickets] = useState<any[]>([]);
-  const [form, setForm] = useState({ title: "", description: "", risk_level: "low", intent_type: "knowledge" });
+  const [form, setForm] = useState({ title: "", description: "" });
   const [modalOpen, setModalOpen] = useState(false);
   const [active, setActive] = useState<number | null>(null);
   const [activeTicket, setActiveTicket] = useState<any>(null);
@@ -293,6 +306,12 @@ export default function Tickets() {
               <div className="chat-area" ref={chatRef}>
                 {msgs.map((m, i) => <MsgView key={i} m={m} />)}
                 {msgs.length === 0 && <p className="muted">该工单暂无对话记录。</p>}
+                {busy && (
+                  <div className="thinking-row">
+                    <span className="thinking-dot" /><span className="thinking-dot" /><span className="thinking-dot" />
+                    <span className="thinking-text">大模型思考中</span>
+                  </div>
+                )}
               </div>
               <div className="chat-foot">
                 <span>🔒</span>
@@ -330,21 +349,7 @@ export default function Tickets() {
                   required
                 />
               </div>
-              <div className="row">
-                <div style={{ flex: 1 }}>
-                  <label>风险等级</label>
-                  <select style={{ width: "100%" }} value={form.risk_level} onChange={(e) => setForm({ ...form, risk_level: e.target.value })}>
-                    <option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option>
-                  </select>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label>意图类型</label>
-                  <select style={{ width: "100%" }} value={form.intent_type} onChange={(e) => setForm({ ...form, intent_type: e.target.value })}>
-                    <option value="knowledge">知识</option><option value="data_query">数据</option>
-                    <option value="change">变更</option><option value="troubleshoot">故障</option>
-                  </select>
-                </div>
-              </div>
+              <p className="muted" style={{ marginTop: 4 }}>意图类型与风险等级将由后端 Agent 自动判定。</p>
               <div className="m-actions">
                 <button type="button" className="secondary" onClick={closeNew}>取消</button>
                 <button type="submit" disabled={busy}>创建并运行</button>
