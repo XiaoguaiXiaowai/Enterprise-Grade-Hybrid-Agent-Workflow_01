@@ -9,6 +9,7 @@ import json
 import re
 
 from .config import settings
+from .tracelog import enabled, log
 
 INTENTS = {"knowledge", "data_query", "change", "troubleshoot"}
 RISKS = {"low", "medium", "high"}
@@ -83,6 +84,10 @@ def classify(title: str, description: str) -> dict:
                 temperature=0, max_tokens=120,
             )
             data = _parse_json(resp.choices[0].message.content or "")
+            if enabled():
+                log("info", "classify",f"prompt={prompt}")
+                log("info", "classify",f"resp={resp}")
+                log("info", "classify",f"data={data}")
             if data:
                 intent = data.get("intent_type")
                 risk = data.get("risk_level")

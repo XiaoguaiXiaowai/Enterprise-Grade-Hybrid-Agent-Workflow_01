@@ -21,6 +21,7 @@ from . import agents_runner
 agents_runner.atrace.install()  # 幂等：把 SDK trace 重定向到本地 SQLite
 from .skills import registry
 from .skills import kb as _kb, user_dir as _ud, grant as _gr  # noqa: F401 注册工具
+from .tracelog import enabled, log
 
 PROMPT_VERSION = "M2-v1"
 
@@ -132,6 +133,14 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
     tools_allowed = registry.tools_for_role(actor_role(actor))
     history = _load_history(ticket_id)
     memo = _load_memo(ticket["tenant_id"])
+
+    if enabled():
+        log("info", "run_ticket",f"routing={routing}")
+        log("info", "run_ticket",f"llm={llm}")
+        log("info", "run_ticket",f"budget={budget.left}")
+        log("info", "run_ticket",f"tools_allowed={tools_allowed}")
+        
+        log("info", "run_ticket",f"ticket={ticket}")
 
     # 恢复模式：批准过的高危工具 → 直接执行
     resume_call = None

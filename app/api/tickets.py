@@ -12,7 +12,7 @@ from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
 from ..classifier import classify
-from ..tracelog import trace_call
+from ..tracelog import trace_call, enabled, log
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -52,6 +52,8 @@ def _serialize(row) -> dict:
 def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
     # 意图/风险交由后端 LLM 自动判定（离线时退化为规则兜底），不再由前端指定
     cls = classify(body.title, body.description)
+    if enabled():
+        log("info", "create_ticket",f"cls={cls}")
     risk = cls["risk_level"] if cls["risk_level"] in RISK_LEVELS else "low"
     intent = cls["intent_type"] if cls["intent_type"] in INTENTS else "knowledge"
     tid = daos.create_ticket(
