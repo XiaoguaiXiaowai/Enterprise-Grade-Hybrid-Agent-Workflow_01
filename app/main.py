@@ -9,6 +9,7 @@ from . import tracelog
 from .api import auth as auth_api
 from .api import tickets as tickets_api
 from .api import governance as governance_api
+from .api import kb as kb_api
 from .skills import kb, user_dir, grant  # noqa: F401  确保工具注册到注册表
 
 # 内置知识库种子（演示用；生产可改为外部数据源）
@@ -45,6 +46,7 @@ app = FastAPI(title="Enterprise Agent Harness Demo", version="0.1.0-M3", lifespa
 app.include_router(auth_api.router)
 app.include_router(tickets_api.router)
 app.include_router(governance_api.router)
+app.include_router(kb_api.router)
 
 
 @app.middleware("http")

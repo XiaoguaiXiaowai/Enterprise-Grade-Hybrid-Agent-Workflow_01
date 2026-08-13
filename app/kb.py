@@ -23,11 +23,60 @@ def init_kb() -> None:
 
 
 def seed_kb(docs: list[dict]) -> None:
+    """以 kb_documents 为权威来源种入文档，并重建检索索引（FTS 必做、向量尽力）。"""
+    with session() as conn:
+        conn.execute("DELETE FROM kb_documents")
+        for d in docs:
+            conn.execute(
+                "INSERT INTO kb_documents (filename, title, content, tag) VALUES (?,?,?,?)",
+                (d.get("filename", d.get("title", "") + ".txt"),
+                 d["title"], d["content"], d.get("tag", "doc")))
+    rebuild_indexes()
+
+
+def rebuild_indexes() -> None:
+    """同步 FTS 表并尽力重建向量索引（Ollama 不可用/依赖缺失时静默跳过向量）。"""
+    docs = list_documents()
     with session() as conn:
         conn.execute("DELETE FROM kb_fts")
         for d in docs:
             conn.execute("INSERT INTO kb_fts (title, content, tag) VALUES (?,?,?)",
-                         (d["title"], d["content"], d.get("tag", "it")))
+                         (d["title"], d["content"], d["tag"]))
+    # 向量索引：尽力而为
+    if vector_kb._VECTOR_OK:
+        try:
+            vec_docs = [{"title": d["title"], "tag": d["tag"], "content": d["content"]}
+                        for d in docs]
+            vector_kb.index_docs(vec_docs)
+        except Exception:
+            pass
+
+
+def list_documents() -> list[dict]:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT id, filename, title, content, tag, created_at FROM kb_documents ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_document(filename: str, title: str, content: str, tag: str = "doc") -> int:
+    with session() as conn:
+        cur = conn.execute(
+            "INSERT INTO kb_documents (filename, title, content, tag) VALUES (?,?,?,?)",
+            (filename, title, content, tag))
+        new_id = cur.lastrowid
+    rebuild_indexes()
+    return new_id
+
+
+def delete_document(doc_id: int) -> bool:
+    with session() as conn:
+        cur = conn.execute("DELETE FROM kb_documents WHERE id = ?", (doc_id,))
+        if cur.rowcount == 0:
+            return False
+    rebuild_indexes()
+    return True
 
 
 def search(query: str, top_k: int = 3) -> list[dict]:

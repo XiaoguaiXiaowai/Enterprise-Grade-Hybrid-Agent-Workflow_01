@@ -74,9 +74,6 @@ export function approve(ticketId: number, approvalId: number, decision: string, 
     body: JSON.stringify({ approval_id: approvalId, decision, reason }),
   });
 }
-export function getTraces(ticketId: number) {
-  return req<any[]>(`/api/traces/${ticketId}`);
-}
 export function getMetrics() {
   return req<any>("/api/metrics");
 }
@@ -96,3 +93,30 @@ export function subscribeTicketWS(ticketId: number, onEvent: (e: any) => void): 
   return () => { try { ws.close(); } catch { /* ignore */ } };
 }
 
+
+// 知识库管理
+export function listDocuments() {
+  return req<any[]>("/api/kb");
+}
+export async function uploadDocument(file: File): Promise<any> {
+  const token = getToken();
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${API}/api/kb/upload`, {
+    method: "POST",
+    headers: token ? { "X-Auth-Token": token } : {},
+    body: fd,
+  });
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("未登录");
+  }
+  if (!res.ok) {
+    throw new Error((await res.text().catch(() => "")) || res.statusText);
+  }
+  return res.json();
+}
+export function deleteDocument(id: number) {
+  return req<any>(`/api/kb/${id}`, { method: "DELETE" });
+}

@@ -10,7 +10,7 @@ export default function Nav() {
       <Link href="/tickets">工单台</Link>
       <Link href="/approve">审批台</Link>
       <Link href="/metrics">指标</Link>
-      <Link href="/traces/1">Trace 示例</Link>
+      <Link href="/kb">知识库</Link>
       <button
         className="secondary"
         style={{ marginLeft: "auto" }}
