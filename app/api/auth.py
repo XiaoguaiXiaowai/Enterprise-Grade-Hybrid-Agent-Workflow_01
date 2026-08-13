@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from ..db import session
 from ..security import hash_password, verify_password, create_session
 from ..deps import current_user
+from ..tracelog import trace_call
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -20,6 +21,7 @@ class LoginOut(BaseModel):
 
 
 @router.post("/login", response_model=LoginOut)
+@trace_call("api.auth.login")
 def login(body: LoginIn):
     with session() as conn:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (body.username,)).fetchone()
@@ -31,11 +33,13 @@ def login(body: LoginIn):
 
 
 @router.get("/me")
+@trace_call("api.auth.me")
 def me(ctx: dict = Depends(current_user)):
     return ctx
 
 
 @router.post("/seed")
+@trace_call("api.auth.seed_users")
 def seed_users():
     """M1 演示用：确保存在默认租户与三种角色账户。生产移除。"""
     with session() as conn:

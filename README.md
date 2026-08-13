@@ -190,3 +190,19 @@ mindmap
 4. 打开 Trace 时间线：模型版本 / 提示词版本 / 工具调用 / 状态转移一屏可见
 5. 打开 `/metrics`：成功率、正确失败率、延迟、成本、人工接管率
 6. 收尾：讲"切 Ollama / 走 SSO / 上 K8s 怎么做"——展示可演进性
+
+---
+
+## 函数级调用日志（调试/追踪）
+
+后端内置可开关的函数级日志埋点，用于回答「每次操作到底执行了哪些 py 函数」。
+
+- 开关：`.env` 中 `APP_LOG_LEVEL=info`（`off` 关闭 | `info` 记录请求路由+核心函数进入/退出 | `debug` 同 `info`，预留扩展）。
+- 输出：写入项目目录 `logs/`，按日期命名，同一天累加到同一文件（如 `logs/2026-08-13.log`），文件内含时间戳与函数名，便于 `grep`。
+  ```
+  [10:15:03]  TRACE  enter  orchestrator._run_loop
+  [10:15:03]  TRACE  exit   orchestrator._run_loop  ok
+  [10:15:03]  REQUEST  POST  /api/tickets  ->  api.tickets.create_ticket
+  ```
+- 埋点位置：所有 API 端点（`app/api/*.py`，经 `app/main.py` 中间件记录请求→函数）＋编排核心（`app/orchestrator.py` 的 `run_ticket`/`resume_ticket`/`_run_loop`/`_plan_and_execute`/`_execute_tool`）。
+- 与 DB `traces`/`ticket_events`/`tool_calls` 表互补：DB 存业务/trace 数据用于回放，日志给实时函数级调用链。

@@ -31,6 +31,8 @@ class Settings:
     budget_max_steps: int = int(os.getenv("BUDGET_MAX_STEPS", "25"))
     budget_max_tokens: int = int(os.getenv("BUDGET_MAX_TOKENS", "200000"))
     budget_max_seconds: int = int(os.getenv("BUDGET_MAX_SECONDS", "600"))
+    # 函数级调用日志：off | info | debug（见 tracelog.py）
+    log_level: str = os.getenv("APP_LOG_LEVEL", "off")
 
     @property
     def abs_db_path(self) -> Path:

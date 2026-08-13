@@ -4,7 +4,9 @@ services:
   app:
     build: .
     env_file: .env
-    volumes: ["./data:/app/data"]
+    volumes:
+      - "./data:/app/data"
+      - "./logs:/app/logs"      # 函数级调用日志落到宿主机 logs/
     expose: ["8000"]
     restart: unless-stopped
 

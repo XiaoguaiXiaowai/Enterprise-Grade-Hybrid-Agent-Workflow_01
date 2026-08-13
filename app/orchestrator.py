@@ -10,6 +10,7 @@ import re
 import time
 
 from . import daos, trace as trace_mod, metrics as metrics_mod
+from .tracelog import trace_call
 from .db import session as db_session
 from .budget import Budget, BudgetExceeded
 from .context_assembler import assemble, render
@@ -60,6 +61,7 @@ def _request_hitl(ticket_id, tool, params, actor) -> int:
     return aid
 
 
+@trace_call("orchestrator.resume_ticket")
 def resume_ticket(ticket_id: int, approval_id: int, actor: str = "system", decision="approve"):
     """HITL 审批后恢复执行。
 
@@ -105,10 +107,12 @@ def _walk_transitions(ticket_id, targets, actor, reason="", force_done=True):
             daos.transition(ticket_id, to, actor, reason=reason)
 
 
+@trace_call("orchestrator.run_ticket")
 def run_ticket(ticket_id: int, actor: str = "system"):
     return _run_loop(ticket_id, actor)
 
 
+@trace_call("orchestrator._run_loop")
 def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
     ticket = daos.get_ticket(ticket_id)
     if not ticket:
@@ -225,6 +229,7 @@ def _load_memo(tenant_id) -> str:
     return row["value_json"] if row else "（暂无长期记忆）"
 
 
+@trace_call("orchestrator._plan_and_execute")
 def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
     system = ("你是企业 IT 工单处理 Agent。依据上下文逐步规划并调用工具完成任务。"
               "调用格式：tool_name(param=value)。完成后输出 done:true。"
@@ -259,6 +264,7 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
         return
 
 
+@trace_call("orchestrator._execute_tool")
 def _execute_tool(ticket_id, tool, params, actor, budget, req_id, provider, model,
                   bypass_hitl=False):
     budget.check()

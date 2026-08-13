@@ -12,6 +12,7 @@ from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
 from ..classifier import classify
+from ..tracelog import trace_call
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -47,6 +48,7 @@ def _serialize(row) -> dict:
 
 
 @router.post("", response_model=TicketOut)
+@trace_call("api.tickets.create_ticket")
 def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
     # 意图/风险交由后端 LLM 自动判定（离线时退化为规则兜底），不再由前端指定
     cls = classify(body.title, body.description)
@@ -63,18 +65,21 @@ def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
 
 
 @router.get("")
+@trace_call("api.tickets.list_tickets")
 def list_tickets(ctx: dict = Depends(current_user)):
     # 工单列表仅展示当前登录用户创建/归属的个人工单
     return daos.list_tickets(ctx["tenant_id"], requester_id=ctx["user_id"])
 
 
 @router.get("/all")
+@trace_call("api.tickets.list_all_tickets")
 def list_all_tickets(ctx: dict = Depends(require_role("operator", "admin"))):
     """审批台/治理所需：列出全部工单（仅运维/管理员可见）。"""
     return daos.list_tickets(ctx["tenant_id"])
 
 
 @router.get("/{ticket_id}")
+@trace_call("api.tickets.get_ticket")
 def get_ticket(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
@@ -85,6 +90,7 @@ def get_ticket(ticket_id: int, ctx: dict = Depends(current_user)):
 
 
 @router.post("/{ticket_id}/run")
+@trace_call("api.tickets.run")
 def run(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
@@ -96,6 +102,7 @@ def run(ticket_id: int, ctx: dict = Depends(current_user)):
 
 
 @router.get("/{ticket_id}/conversation")
+@trace_call("api.tickets.conversation")
 def conversation(ticket_id: int, ctx: dict = Depends(current_user)):
     """工单内容模块所需：按时间顺序返回工单全部对话记录。"""
     row = daos.get_ticket(ticket_id)
@@ -107,6 +114,7 @@ def conversation(ticket_id: int, ctx: dict = Depends(current_user)):
 
 
 @router.get("/{ticket_id}/events")
+@trace_call("api.tickets.events")
 def events(ticket_id: int, token: str | None = None):
     # 兼容 EventSource（无法带自定义 header）——允许经 query token 复用会话
     ctx = resolve_token(token) if token else None
@@ -141,6 +149,7 @@ def events(ticket_id: int, token: str | None = None):
 
 
 @router.websocket("/{ticket_id}/ws")
+@trace_call("api.tickets.ws_events")
 async def ws_events(websocket: WebSocket, ticket_id: int, token: str | None = None):
     """WebSocket 实时推送工单事件流：先回放已有事件，再增量推送新的流程事件。
 
@@ -181,6 +190,7 @@ class ApproveIn(BaseModel):
 
 
 @router.post("/{ticket_id}/approve")
+@trace_call("api.tickets.approve")
 def approve(body: ApproveIn, ticket_id: int, ctx: dict = Depends(require_role("operator", "admin"))):
     ap = _daos.get_approval(body.approval_id)
     if not ap or ap["ticket_id"] != ticket_id:
@@ -200,6 +210,7 @@ def approve(body: ApproveIn, ticket_id: int, ctx: dict = Depends(require_role("o
 
 
 @router.get("/{ticket_id}/approvals", dependencies=[Depends(current_user)])
+@trace_call("api.tickets.approvals")
 def approvals(ticket_id: int, ctx: dict = Depends(current_user)):
     return [_daos.get_approval(a["id"]) and {**dict(_daos.get_approval(a["id"]))}
             for a in _daos.pending_for_ticket(ticket_id)]

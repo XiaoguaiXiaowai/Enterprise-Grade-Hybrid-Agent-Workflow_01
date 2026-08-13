@@ -1,10 +1,11 @@
 """FastAPI 应用入口：初始化 DB、注册路由、启动播种演示账户。"""
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from .db import init_db
 from .kb import init_kb, seed_kb
+from . import tracelog
 from .api import auth as auth_api
 from .api import tickets as tickets_api
 from .api import governance as governance_api
@@ -38,6 +39,13 @@ app = FastAPI(title="Enterprise Agent Harness Demo", version="0.1.0-M3", lifespa
 app.include_router(auth_api.router)
 app.include_router(tickets_api.router)
 app.include_router(governance_api.router)
+
+
+@app.middleware("http")
+async def trace_requests(request: Request, call_next):
+    """请求级埋点：记录 method + path（精确端点函数名由各端点 @trace_call 输出）。"""
+    tracelog.log("REQUEST", request.method, request.url.path)
+    return await call_next(request)
 
 
 @app.get("/health")
