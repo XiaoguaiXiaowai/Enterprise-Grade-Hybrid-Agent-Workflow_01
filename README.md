@@ -66,7 +66,7 @@ flowchart TB
     subgraph data["数据层 · 本地零成本"]
         sql[(SQLite<br/>多租户 · RBAC · 指标)]
         fs[(文件系统<br/>artifacts · traces · memory)]
-        kb[(知识库<br/>RAG / FTS)]
+        kb[(知识库<br/>向量 RAG + FTS)]
     end
 
     emp --> auth

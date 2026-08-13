@@ -26,11 +26,17 @@ DEFAULT_KB = [
 async def lifespan(app: FastAPI):
     init_db()
     init_kb()
-    # 幂等种入知识库（仅当为空时）
+    # 幂等种入知识库（仅当为空时）：先 FTS，再尽力做向量索引
     with __import__("app.db", fromlist=["session"]).session() as conn:
         cnt = conn.execute("SELECT COUNT(*) c FROM kb_fts").fetchone()["c"]
     if cnt == 0:
         seed_kb(DEFAULT_KB)
+    try:
+        from . import vector_kb
+        if vector_kb.vector_enabled() is False and vector_kb._VECTOR_OK:
+            vector_kb.index_docs(DEFAULT_KB)
+    except Exception:
+        pass
     auth_api.seed_users()
     yield
 

@@ -24,14 +24,14 @@ def search_kb(query: str, top_k: int = 3) -> dict:
             hits = []
     if not hits:
         hits = [{"title": "no_match", "content": _FALLBACK["content"], "rank": 0}]
-    return {"hits": hits, "source": "local_kb_fts"}
+    return {"hits": hits, "source": "hybrid_kb"}
 
 
 @register_tool(name="search_kb_direct", risk="low",
                description="直接查看企业知识库某主题条目（内部审计用）。")
 def search_kb_direct(topic: str) -> dict:
     rows = search_simple(topic, 1) if _has_kb() else []
-    return {"rows": rows, "source": "local_kb_fts"}
+    return {"rows": rows, "source": "hybrid_kb"}
 
 
 def _has_kb() -> bool:

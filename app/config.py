@@ -34,6 +34,15 @@ class Settings:
     # 函数级调用日志：off | info | debug（见 tracelog.py）
     log_level: str = os.getenv("APP_LOG_LEVEL", "off")
 
+    # 向量知识库（本地 RAG）：Ollama bge-m3 生成 embedding，LanceDB 存向量
+    vector_db_path: str = os.getenv("VECTOR_DB_PATH", "data/vector-kb")
+    embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "bge-m3:latest")
+    embedding_dim: int = int(os.getenv("EMBEDDING_DIM", "1024"))
+    vector_chunk_size: int = int(os.getenv("VECTOR_CHUNK_SIZE", "300"))
+    vector_chunk_overlap: int = int(os.getenv("VECTOR_CHUNK_OVERLAP", "60"))
+    vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "3"))
+
     @property
     def abs_db_path(self) -> Path:
         p = Path(self.db_path)
