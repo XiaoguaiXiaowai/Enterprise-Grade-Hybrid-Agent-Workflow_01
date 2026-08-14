@@ -104,7 +104,7 @@ def run(ticket_id: int, ctx: dict = Depends(current_user)):
 
 
 @router.get("/{ticket_id}/conversation")
-@trace_call("api.tickets.conversation")
+#@trace_call("api.tickets.conversation")
 def conversation(ticket_id: int, ctx: dict = Depends(current_user)):
     """工单内容模块所需：按时间顺序返回工单全部对话记录。"""
     row = daos.get_ticket(ticket_id)

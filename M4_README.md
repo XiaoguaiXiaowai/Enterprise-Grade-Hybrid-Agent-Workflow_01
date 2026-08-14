@@ -38,12 +38,16 @@ pip install -r requirements.txt   # 含 openai>=1.40, openai-agents>=0.0.9
 ## 模型配置（.env）
 
 ```bash
-MODEL_PROVIDER=openrouter
-MODEL_NAME=openrouter/free          # OpenRouter 上的任意模型 id
+# 主用 OpenRouter ⇄ 兜底 Ollama ⇄ 离线 reader（详见 doc/模型配置清单.md）
 OPENROUTER_API_KEY=sk-or-v1-...     # 你的 OpenRouter Key
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
-OLLAMA_MODEL_NAME=qwen2.5:7b        # Ollama 兜底
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1   # Ollama 服务器地址（可配置）
+AGENT_MODEL=openrouter/free         # Agent 主用模型
+AGENT_FALLBACK_MODEL=qwen2.5:7b     # Agent 兜底模型（Ollama）
+CLASSIFIER_MODEL=openrouter/free    # 意图分类主用模型
+CLASSIFIER_FALLBACK_MODEL=qwen2.5:7b
+ROUTER_MODEL_DEFAULT=openrouter/free
+ROUTER_MODEL_HIGH_RISK=openrouter/free
 ```
 
 ## 验证

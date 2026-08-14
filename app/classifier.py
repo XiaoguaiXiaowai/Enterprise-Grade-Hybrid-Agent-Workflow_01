@@ -1,14 +1,15 @@
 """工单意图/风险自动判定（由后端 LLM 判断，替代前端手动选择）。
 
-- 主链路：调用 OpenRouter（OpenAI 兼容 /v1/chat/completions），让 LLM 依据
-  标题+内容输出结构化 JSON：{intent_type, risk_level, reason}
-- 兜底：无密钥 / 离线 / 解析失败时用关键词规则，保证新建工单仍可用可演示。
+- 主链路：OpenRouter（OpenAI 兼容 /v1/chat/completions），让 LLM 依据标题+内容输出
+  结构化 JSON：{intent_type, risk_level, reason}
+- 兜底：主用失败 → Ollama 兜底 → 再失败才用关键词规则，保证新建工单仍可用可演示。
 """
 from __future__ import annotations
 import json
 import re
 
 from .config import settings
+from .llm_gateway import chat_with_fallback
 from .tracelog import enabled, log
 
 INTENTS = {"knowledge", "data_query", "change", "troubleshoot"}
@@ -71,23 +72,21 @@ def classify(title: str, description: str) -> dict:
         f"工单标题：{title}\n工单内容：{description}"
     )
 
-    try:
-        if settings.openrouter_api_key:
-            from openai import OpenAI
-            client = OpenAI(
-                api_key=settings.openrouter_api_key,
-                base_url=settings.openrouter_base_url,
-            )
-            model = settings.model_name
-            resp = client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}],
+    if settings.openrouter_api_key:
+        try:
+            result = chat_with_fallback(
+                [{"role": "user", "content": prompt}],
+                primary_model=settings.classifier_model,
+                fallback_model=settings.classifier_fallback_model,
+                fallback_base_url=settings.ollama_base_url,
                 temperature=0, max_tokens=120,
+                raise_if_reader=True,
             )
-            data = _parse_json(resp.choices[0].message.content or "")
+            data = _parse_json(result.content or "")
             if enabled():
-                log("info", "classify",f"prompt={prompt}")
-                log("info", "classify",f"resp={resp}")
-                log("info", "classify",f"data={data}")
+                log("info", "classify", f"prompt={prompt}")
+                log("info", "classify", f"resp={result.content}")
+                log("info", "classify", f"data={data}")
             if data:
                 intent = data.get("intent_type")
                 risk = data.get("risk_level")
@@ -98,8 +97,8 @@ def classify(title: str, description: str) -> dict:
                         "source": "llm",
                         "reason": data.get("reason", ""),
                     }
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     intent, risk = _rule_classify(text)
     return {"intent_type": intent, "risk_level": risk,

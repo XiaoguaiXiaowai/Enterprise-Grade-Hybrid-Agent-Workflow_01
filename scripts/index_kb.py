@@ -3,7 +3,7 @@
 用法：
     .venv/bin/python scripts/index_kb.py            # 用当前 SQLite 知识库内容建索引
     VECTOR_DB_PATH=/tmp/vk .venv/bin/python scripts/index_kb.py  # 指定向量库位置
-前置：Ollama 已启动且已拉取 bge-m3（ollama pull bge-m3）。
+前置：主用走 OpenRouter embedding（默认 nemotron-3-embed-1b:free）；若切兜底需 Ollama 已启动且已拉取 bge-m3（ollama pull bge-m3）。
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

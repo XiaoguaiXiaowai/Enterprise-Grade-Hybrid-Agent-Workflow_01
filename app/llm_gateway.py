@@ -1,7 +1,9 @@
 """LLM 网关：统一 /v1/chat/completions 协议，支持 OpenAI SDK 与 Ollama 双后端。
 
-- provider="openai"：优先用 OpenAI SDK（openai 包），base_url 可指向 OpenAI 或兼容网关
-- provider="ollama"：用 httpx 直连本地 Ollama 的 /v1/chat/completions
+- 提供公共熔断工具 build_openai_client / chat_with_fallback：
+  「主用(OpenRouter) → Ollama 兜底 → 离线 reader」三级降级，供 classifier 与传统网关复用
+- provider="openai"：openai 包，base_url 指向 OpenRouter
+- provider="ollama"：httpx 直连 Ollama 的 /v1/chat/completions
 - provider="reader"（兜底）：离线返回占位 plan，便于无密钥/离线时演示与测试
 """
 from dataclasses import dataclass
@@ -19,39 +21,94 @@ class LLMResult:
     latency_ms: int = 0
 
 
+def build_openai_client(base_url: str | None = None, api_key: str | None = None):
+    """构造 OpenAI 兼容客户端；优先 OpenRouter 配置，可按需覆盖 base_url/api_key。"""
+    from openai import OpenAI
+    return OpenAI(
+        api_key=api_key or settings.openrouter_api_key or "sk-none",
+        base_url=base_url or settings.openrouter_base_url,
+    )
+
+
+def _ollama_chat_raw(messages: list, model: str, base_url: str, temperature: int = 0) -> dict:
+    """httpx 直连 Ollama /v1/chat/completions（Ollama 2.3+ 兼容 OpenAI 协议）。"""
+    import httpx
+    url = (base_url or settings.ollama_base_url).rstrip("/") + "/chat/completions"
+    payload = {"model": model, "messages": messages, "temperature": temperature}
+    with httpx.Client(timeout=120) as client:
+        r = client.post(url, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
+                       base_url: str | None = None, fallback_base_url: str | None = None,
+                       temperature: int = 0, max_tokens: int | None = None,
+                       api_key: str | None = None,
+                       reader_builder=None, raise_if_reader=False) -> LLMResult:
+    """三级降级：主用 OpenAI 兼容 → Ollama 兜底 → 离线 reader。
+
+    返回 LLMResult；reader 兜底也失败（或 raise_if_reader=True）时抛最后一次异常之外的
+    RuntimeError，便于调用方显式走规则等末级降级。
+    """
+    error = None
+    # 1) 主用（OpenRouter / OpenAI 兼容）
+    if primary_model:
+        try:
+            return _openai_chat(messages, primary_model, base_url=base_url,
+                                api_key=api_key, temperature=temperature,
+                                max_tokens=max_tokens)
+        except Exception as e:  # noqa: BLE001
+            error = e
+    # 2) Ollama 兜底
+    if fallback_model:
+        try:
+            data = _ollama_chat_raw(messages, fallback_model,
+                                    base_url=fallback_base_url or settings.ollama_base_url,
+                                    temperature=temperature)
+            return _llm_result_from_ollama_data(data, messages)
+        except Exception as e:  # noqa: BLE001
+            error = e
+    # 3) 离线 reader
+    if reader_builder is not None:
+        return reader_builder(messages)
+    if raise_if_reader:
+        raise RuntimeError(f"主用与 Ollama 兜底均失败: {error}")
+    return _ReaderBackend().chat(messages)
+
+
+def _openai_chat(messages: list, model: str, base_url: str | None = None,
+                 api_key: str | None = None, temperature: int = 0,
+                 max_tokens: int | None = None) -> LLMResult:
+    client = build_openai_client(base_url=base_url, api_key=api_key)
+    t0 = datetime.now()
+    kwargs = {"model": model, "messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    resp = client.chat.completions.create(**kwargs)
+    ms = int((datetime.now() - t0).total_seconds() * 1000)
+    usage = resp.usage.model_dump() if resp.usage else {}
+    return LLMResult(content=resp.choices[0].message.content or "",
+                     model=resp.model, provider="openrouter", usage=usage, latency_ms=ms)
+
+
+def _llm_result_from_ollama_data(data: dict, messages: list) -> LLMResult:
+    usage = data.get("usage", {})
+    return LLMResult(content=data["choices"][0]["message"]["content"],
+                     model=data.get("model", ""), provider="ollama", usage=usage)
+
+
 class _OpenAIBackend:
     def chat(self, messages, model=None, **_kw) -> LLMResult:
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.openai_api_key or "sk-none",
-                        base_url=settings.openai_base_url or None)
-        t0 = datetime.now()
-        resp = client.chat.completions.create(
-            model=model or settings.model_name, messages=messages, temperature=0)
-        ms = int((datetime.now() - t0).total_seconds() * 1000)
-        usage = resp.usage.model_dump() if resp.usage else {}
-        return LLMResult(content=resp.choices[0].message.content or "",
-                         model=resp.model, provider="openai",
-                         usage=usage, latency_ms=ms)
+        return _openai_chat(messages, model or settings.agent_model)
 
 
 class _OllamaBackend:
     """httpx 直连 Ollama /v1/chat/completions（Ollama 2.3+ 兼容 OpenAI 协议）。"""
     def chat(self, messages, model=None, **_kw) -> LLMResult:
-        import httpx as _httpx
-        import json as _json
-        url = settings.ollama_base_url.rstrip("/") + "/chat/completions"
-        payload = {"model": model or settings.model_name, "messages": messages, "temperature": 0}
-        t0 = datetime.now()
-        # 注意：沙箱无法外连，调用方失败时应由外层捕获转 reader
-        with _httpx.Client(timeout=120) as client:
-            r = client.post(url, json=payload)
-            r.raise_for_status()
-            data = r.json()
-        ms = int((datetime.now() - t0).total_seconds() * 1000)
-        usage = data.get("usage", {})
-        return LLMResult(content=data["choices"][0]["message"]["content"],
-                         model=data.get("model", ""), provider="ollama",
-                         usage=usage, latency_ms=ms)
+        data = _ollama_chat_raw(messages, model or settings.agent_fallback_model,
+                                base_url=settings.ollama_base_url)
+        return _llm_result_from_ollama_data(data, messages)
 
 
 class _ReaderBackend:
@@ -87,23 +144,23 @@ class _ReaderBackend:
 
 class LLMGateway:
     def __init__(self, provider: str | None = None):
-        self.provider = provider or settings.model_provider
+        self.provider = provider or ("openrouter" if settings.openrouter_api_key else "reader")
         self.backends = {"openai": _OpenAIBackend(), "ollama": _OllamaBackend(),
                          "reader": _ReaderBackend()}
 
     def chat(self, messages: list, model=None, **kw) -> LLMResult:
-        backend = self.backends.get(self.provider, self.backends["reader"])
-        if self.provider in ("openai", "ollama"):
-            try:
-                return backend.chat(messages, model=model, **kw)
-            except Exception:
-                # 真实后端不可用（无密钥/离线/连不上）→ 回退离线，保证 LOOP 可演示
-                return self.backends["reader"].chat(messages, **kw)
-        return backend.chat(messages, **kw)
+        # 统一三级降级：主用(OpenRouter) → Ollama 兜底 → reader
+        return chat_with_fallback(
+            messages,
+            primary_model=model or settings.agent_model,
+            fallback_model=settings.agent_fallback_model,
+            fallback_base_url=settings.ollama_base_url,
+            reader_builder=lambda msgs: self.backends["reader"].chat(msgs),
+        )
 
     @property
     def name(self) -> str:
-        return f"{self.provider}:{settings.model_name}"
+        return f"{self.provider}:{settings.agent_model}"
 
 
 def get_llm(provider: str | None = None) -> LLMGateway:

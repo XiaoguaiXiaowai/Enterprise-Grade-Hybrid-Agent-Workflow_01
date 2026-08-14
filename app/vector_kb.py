@@ -1,7 +1,8 @@
-"""向量知识库：Ollama bge-m3 生成 embedding，LanceDB 存向量做语义检索。
+"""向量知识库：OpenRouter embedding 主用 + Ollama 兜底，LanceDB 存向量做语义检索。
 
 设计：
-- embedding 走 OpenAI 兼容接口（Ollama /v1/embeddings），bge-m3 默认 1024 维，支持多语言（含中文）。
+- embedding 走 OpenAI 兼容接口：主用 OpenRouter（默认 nvidia/nemotron-3-embed-1b:free），
+  失败时自动切换 Ollama 兜底（默认 bge-m3，1024 维，支持多语言含中文）。
 - 向量库用 LanceDB 嵌入式模式，单目录落地在 data/vector-kb，无独立服务，贴合单机零成本。
 - 依赖（lancedb/numpy/pyarrow）或 Ollama 不可用时优雅降级：返回空召回，由上层回退关键词检索。
 """
@@ -47,40 +48,108 @@ def _connect():
     return lancedb.connect(str(p))
 
 
-def _embedding_client():
-    """惰性构造 OpenAI 兼容客户端，指向 Ollama embeddings 端点。"""
+def _embedding_clients():
+    """按配置构建两个 OpenAI 兼容客户端：主用(OpenRouter) 与 兜底(Ollama)。"""
     from openai import OpenAI
-    return OpenAI(base_url=settings.embedding_base_url, api_key="ollama")
+    return {
+        "primary": OpenAI(base_url=settings.embedding_primary_base_url,
+                          api_key=settings.openrouter_api_key or "sk-none"),
+        "fallback": OpenAI(base_url=settings.embedding_base_url, api_key="ollama"),
+    }
 
 
 def embed(texts: list[str]) -> list[list[float]]:
-    """批量生成 embedding。失败抛异常，由调用方降级。"""
-    client = _embedding_client()
-    resp = client.embeddings.create(model=settings.embedding_model, input=texts)
-    ordered = sorted(resp.data, key=lambda d: d.index)
-    return [d.embedding for d in ordered]
+    """按配置优先级生成 embedding：主用(OpenRouter) → 兜底(Ollama)。
+
+    未配置有效主模型或主用调用失败时自动切换 Ollama 兜底；均失败抛异常，由调用方降级。
+    """
+    clients = _embedding_clients()
+
+    # 1) 主用：仅在配置了有效 embedding 主模型时尝试（OpenRouter）
+    primary_model = (settings.embedding_model or "").strip()
+    if primary_model:
+        try:
+            resp = clients["primary"].embeddings.create(
+                model=primary_model, input=texts)
+            ordered = sorted(resp.data, key=lambda d: d.index)
+            vecs = [d.embedding for d in ordered]
+            if vecs and all(v for v in vecs):
+                return vecs
+        except Exception:
+            pass  # 主用失败 → 落兜底
+
+    # 2) 兜底：Ollama 本地 embedding
+    fallback_model = (settings.embedding_fallback_model or "").strip()
+    if fallback_model:
+        resp = clients["fallback"].embeddings.create(
+            model=fallback_model, input=texts)
+        ordered = sorted(resp.data, key=lambda d: d.index)
+        return [d.embedding for d in ordered]
+
+    raise RuntimeError("未配置有效的 embedding 模型（EMBEDDING_MODEL / EMBEDDING_FALLBACK_MODEL）")
+
+
+# 递归切分分隔符（从粗到细），零依赖复刻 langchain RecursiveCharacterTextSplitter 思路
+_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""]
+
+
+def _split_by(text: str, sep: str) -> list[str]:
+    """按单个分隔符切分，保留分隔符粘在前一段末尾（避免破坏句子结尾）。"""
+    if sep == "":
+        return list(text)
+    parts = text.split(sep)
+    out = []
+    for i, part in enumerate(parts):
+        piece = part
+        if i < len(parts) - 1:
+            piece = part + sep
+        if piece:
+            out.append(piece)
+    return out
+
+
+def _merge_chunks(segments: list[str], size: int, overlap: int) -> list[str]:
+    """贪心把段合并到 size 以内；封块时带上上一块尾部 overlap 字符衔接。"""
+    chunks: list[str] = []
+    current = ""
+    for seg in segments:
+        if not current:
+            current = seg
+            continue
+        if len(current) + len(seg) <= size:
+            current += seg
+        else:
+            chunks.append(current)
+            current = (current[-overlap:] if overlap else "") + seg
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _chunk_text(text: str) -> list[str]:
-    """按段落/句子切块，控制单块长度与重叠（防止语义切碎）。"""
+    """递归切分：按段落→句子→子句→字符逐层降级，尽量在自然边界切断。
+
+    与原 langchain 方案一致：先用最粗分隔符（\n\n）切，若某块仍超 size 就换下一级
+    分隔符（\n、句末标点、逗号、空格）继续递归切，最后降级到按字符硬切。
+    """
     size, overlap = settings.vector_chunk_size, settings.vector_chunk_overlap
-    # 先按空行/换行切段，再按字符长度合并
-    raw = [seg.strip() for seg in re.split(r"\n+", text) if seg.strip()]
-    here, chunks = [], []
-    for seg in raw:
-        # 超长单段：内部按长度硬切
-        while len(seg) > size:
-            piece, seg = seg[:size], seg[size:]
-            chunks.append(piece)
-        if here and len("".join(here)) + len(seg) > size:
-            joined = "".join(here)
-            chunks.append(joined[-overlap:] + seg if overlap else joined + seg)
-            here = [seg] if not overlap else []
-        else:
-            here.append(seg)
-    if here:
-        chunks.append("".join(here))
-    return chunks
+
+    def recurse(t: str, idx: int = 0) -> list[str]:
+        sep = _SEPARATORS[idx]
+        if sep == "":
+            # 终极降级：按字符拆成单字符片段
+            return [ch for ch in t if ch != ""]
+        pieces = _split_by(t, sep)
+        out: list[str] = []
+        for piece in pieces:
+            if len(piece) <= size:
+                out.append(piece)
+            else:
+                out.extend(recurse(piece, idx + 1))
+        return out
+
+    # 仅做一次最终合并（含 overlap），避免二次合并产生块长漂移
+    return _merge_chunks(recurse(text), size, overlap)
 
 
 def _normalize(vec: list[float]) -> list[float]:

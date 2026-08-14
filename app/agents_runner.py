@@ -168,7 +168,7 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
                 result = _run(fb_agent, user_input, run_config, run_ctx,
                               max_turns=budget.max_steps)
                 routing = {**routing, "provider": "ollama",
-                           "model": settings.ollama_model_name}
+                           "model": settings.agent_fallback_model}
             except Exception as e2:
                 raise SdkUnavailable(
                     f"SDK 模型调用失败: {e}; Ollama 兜底也失败: {e2}") from e2

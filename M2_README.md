@@ -15,12 +15,12 @@
 
 ## 模型配置
 ```bash
-# .env
-MODEL_PROVIDER=ollama            # openai | ollama | reader
-MODEL_NAME=qwen2.5:7b
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=                 # 留空用 OpenAI 官方
+# .env（注：M2 期旧键 MODEL_PROVIDER/MODEL_NAME/OPENAI_* 已由 M5 重构移除，统一为新场景键）
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+AGENT_MODEL=openrouter/free
+AGENT_FALLBACK_MODEL=qwen2.5:7b
 BUDGET_MAX_STEPS=25
 BUDGET_MAX_TOKENS=200000
 BUDGET_MAX_SECONDS=600

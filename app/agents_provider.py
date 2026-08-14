@@ -3,7 +3,7 @@
 实现：自定义 ModelProvider（SDK 稳定接口），按模型名前缀路由：
 - `openrouter:...` → OpenAIChatCompletionsModel + OpenRouter AsyncOpenAI 客户端
 - `ollama:...`     → OpenAIChatCompletionsModel + Ollama AsyncOpenAI 客户端
-- 无前缀 → 默认按 settings.model_provider 归一化
+- 无前缀 → 默认按 OpenRouter 归一化
 
 不依赖 MultiProvider 等新类，规避版本差异；OpenRouter/Ollama 都是 OpenAI 兼容
 `/v1/chat/completions`，用 SDK 的 OpenAIChatCompletionsModel 即可。
@@ -43,7 +43,7 @@ class RouterProvider(ModelProvider if _SDK_OK else object):
         )
 
     def get_model(self, model_name: str):
-        name = model_name or settings.model_name
+        name = model_name or settings.agent_model
         if name.startswith("ollama:"):
             return OpenAIChatCompletionsModel(
                 model=name.removeprefix("ollama:"),
@@ -56,7 +56,7 @@ class RouterProvider(ModelProvider if _SDK_OK else object):
         )
 
     def get_default_model_name(self) -> str:
-        return settings.model_name
+        return settings.agent_model
 
 
 def build_provider():
@@ -68,7 +68,7 @@ def build_fallback_model():
     """构造 Ollama 兜底模型（SDK 不可用时返回 None）。"""
     if not _SDK_OK:
         return None
-    name = settings.ollama_model_name.removeprefix("ollama:")
+    name = settings.agent_fallback_model.removeprefix("ollama:")
     return OpenAIChatCompletionsModel(
         model=name,
         openai_client=AsyncOpenAI(api_key="ollama", base_url=settings.ollama_base_url),
