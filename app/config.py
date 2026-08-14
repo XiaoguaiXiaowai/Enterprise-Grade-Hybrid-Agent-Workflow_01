@@ -54,6 +54,31 @@ class Settings:
     vector_chunk_overlap: int = int(os.getenv("VECTOR_CHUNK_OVERLAP", "200"))
     vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "3"))
 
+    # ===== 建单输入校验 / 提示词重写（M5）=====
+    # 建单时先用 LLM 确认输入与 IT 工单领域是否相关（默认开）
+    input_relevance_check: bool = os.getenv("INPUT_RELEVANCE_CHECK", "true").lower() in ("1", "true", "yes", "on")
+    # 建单内容不直接并入提示词，先用 LLM 总结归纳后再并入（默认开）
+    prompt_rewrite: bool = os.getenv("PROMPT_REWRITE", "true").lower() in ("1", "true", "yes", "on")
+    @staticmethod
+    def _first_nonempty(*keys: str, default: str = "") -> str:
+        """取第一个非空环境变量；全部为空/未设时返回 default。"""
+        for k in keys:
+            v = os.getenv(k)
+            if v:
+                return v
+        return default
+
+    # 相关性校验专用模型（为空则复用 classifier 模型）
+    relevance_model: str = _first_nonempty(
+        "RELEVANCE_MODEL", "CLASSIFIER_MODEL", default="openrouter/free")
+    relevance_fallback_model: str = _first_nonempty(
+        "RELEVANCE_FALLBACK_MODEL", "CLASSIFIER_FALLBACK_MODEL", default="qwen2.5:7b")
+    # 提示词重写专用模型（为空则复用 classifier 模型）
+    rewrite_model: str = _first_nonempty(
+        "REWRITE_MODEL", "CLASSIFIER_MODEL", default="openrouter/free")
+    rewrite_fallback_model: str = _first_nonempty(
+        "REWRITE_FALLBACK_MODEL", "CLASSIFIER_FALLBACK_MODEL", default="qwen2.5:7b")
+
     @property
     def abs_db_path(self) -> Path:
         p = Path(self.db_path)

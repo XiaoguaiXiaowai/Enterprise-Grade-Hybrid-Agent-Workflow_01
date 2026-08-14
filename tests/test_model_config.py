@@ -330,6 +330,144 @@ def test_llm_gateway_uses_scene_models():
         _restore(saved)
 
 
+def test_relevance_check_llm_related():
+    """相关性校验：LLM 判定相关 → relevant=True。"""
+    import app.classifier as clf
+
+    saved = _patch(openrouter_api_key="sk-test")
+    orig_fb = clf.chat_with_fallback
+
+    def fake_fb(messages, **kw):
+        return LLMResult(content='{"relevant": true, "reason": "属于IT故障排查"}',
+                         model="m", provider="openrouter", usage={})
+
+    clf.chat_with_fallback = fake_fb
+    try:
+        r = clf.relevance_check("VPN 连不上", "无法连接公司 VPN")
+        assert r["relevant"] is True and r["reason"] == "属于IT故障排查"
+        assert r["source"] == "llm"
+    finally:
+        clf.chat_with_fallback = orig_fb
+        _restore(saved)
+
+
+def test_relevance_check_llm_irrelevant():
+    """相关性校验：LLM 判定不相关 → relevant=False（建单应被拒绝）。"""
+    import app.classifier as clf
+
+    saved = _patch(openrouter_api_key="sk-test")
+    orig_fb = clf.chat_with_fallback
+
+    def fake_fb(messages, **kw):
+        return LLMResult(content='{"relevant": false, "reason":"与IT工单无关"}',
+                         model="m", provider="openrouter", usage={})
+
+    clf.chat_with_fallback = fake_fb
+    try:
+        r = clf.relevance_check("帮我写个招聘启事", "招聘销售岗位")
+        assert r["relevant"] is False and r["reason"] == "与IT工单无关"
+    finally:
+        clf.chat_with_fallback = orig_fb
+        _restore(saved)
+
+
+def test_relevance_check_fallback_allows():
+    """相关性校验：LLM 不可用 → 放行（relevant=True），避免误拦。"""
+    import app.classifier as clf
+
+    saved = _patch(openrouter_api_key="sk-test")
+    orig_fb = clf.chat_with_fallback
+
+    def broken(*a, **kw):
+        raise RuntimeError("backends down")
+
+    clf.chat_with_fallback = broken
+    try:
+        r = clf.relevance_check("随便什么内容", "无明显关键词内容")
+        assert r["relevant"] is True and r["source"] == "rule"
+    finally:
+        clf.chat_with_fallback = orig_fb
+        _restore(saved)
+
+
+def test_relevance_check_rule_reject_chat():
+    """相关性校验：LLM 无返回且命中明显非 IT 闲聊关键词 → 判定不相关。"""
+    import app.classifier as clf
+
+    saved = _patch(openrouter_api_key="")
+    r = clf.relevance_check("午餐吃什么", "推荐一下今天中午吃什么，随便聊聊")
+    assert r["relevant"] is False, r
+    assert r["source"] == "rule"
+    _restore(saved)
+
+
+def test_rewrite_content_llm():
+    """提示词重写：LLM 返回摘要 → 使用该摘要而非原文。"""
+    import app.classifier as clf
+
+    saved = _patch(openrouter_api_key="sk-test")
+    orig_fb = clf.chat_with_fallback
+
+    def fake_fb(messages, **kw):
+        return LLMResult(
+            content='{"summary":"为 u-1024 开通数据库只读权限","keywords":["u-1024","只读"]}',
+            model="m", provider="openrouter", usage={})
+
+    clf.chat_with_fallback = fake_fb
+    try:
+        r = clf.rewrite_content("开通数据库只读账号", "给 u-1024 开通 db 只读权限")
+        assert r["source"] == "llm"
+        assert r["summary"] == "为 u-1024 开通数据库只读权限"
+        assert "u-1024" in r["keywords"]
+    finally:
+        clf.chat_with_fallback = orig_fb
+        _restore(saved)
+
+
+def test_rewrite_content_fallback_original():
+    """提示词重写：LLM 不可用 → 原样返回原文摘要，流程不中断。"""
+    import app.classifier as clf
+
+    saved = _patch(openrouter_api_key="sk-test")
+    orig_fb = clf.chat_with_fallback
+
+    def broken(*a, **kw):
+        raise RuntimeError("backends down")
+
+    clf.chat_with_fallback = broken
+    try:
+        r = clf.rewrite_content("VPN 连不上", "排查 VPN 连接")
+        assert r["source"] == "rule"
+        assert "VPN 连不上" in r["summary"] and "排查 VPN 连接" in r["summary"]
+    finally:
+        clf.chat_with_fallback = orig_fb
+        _restore(saved)
+
+
+def test_newfeature_model_override_and_fallback():
+    """相关性校验/提示词重写：专用模型优先，留空则回退到 classifier 模型。"""
+    s2 = _env(
+        CLASSIFIER_MODEL="openrouter/classifier-base",
+        CLASSIFIER_FALLBACK_MODEL="classifier-ollama",
+    )
+    assert s2.relevance_model == "openrouter/classifier-base"
+    assert s2.relevance_fallback_model == "classifier-ollama"
+    assert s2.rewrite_model == "openrouter/classifier-base"
+
+    s3 = _env(
+        CLASSIFIER_MODEL="openrouter/classifier-base",
+        CLASSIFIER_FALLBACK_MODEL="classifier-ollama",
+        RELEVANCE_MODEL="openrouter/relevance-strong",
+        RELEVANCE_FALLBACK_MODEL="relevance-ollama",
+        REWRITE_MODEL="openrouter/rewrite-strong",
+        REWRITE_FALLBACK_MODEL="rewrite-ollama",
+    )
+    assert s3.relevance_model == "openrouter/relevance-strong"
+    assert s3.relevance_fallback_model == "relevance-ollama"
+    assert s3.rewrite_model == "openrouter/rewrite-strong"
+    assert s3.rewrite_fallback_model == "rewrite-ollama"
+
+
 def _run_all():
     fns = [(name, fn) for name, fn in sorted(globals().items())
            if name.startswith("test_") and callable(fn)]

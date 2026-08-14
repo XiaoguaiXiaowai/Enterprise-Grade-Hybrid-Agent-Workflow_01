@@ -119,6 +119,7 @@ export default function Tickets() {
   const [tickets, setTickets] = useState<any[]>([]);
   const [form, setForm] = useState({ title: "", description: "" });
   const [modalOpen, setModalOpen] = useState(false);
+  const [formErr, setFormErr] = useState("");
   const [active, setActive] = useState<number | null>(null);
   const [activeTicket, setActiveTicket] = useState<any>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -152,13 +153,14 @@ export default function Tickets() {
     stopStreamRef.current?.();
   }, []);
 
-  function openNew() { setModalOpen(true); }
+  function openNew() { setFormErr(""); setModalOpen(true); }
 
   function closeNew() {
     stopStreamRef.current?.();
     if (stopPollRef.current !== null) { window.clearInterval(stopPollRef.current); stopPollRef.current = null; }
     setModalOpen(false);
     setMsg("");
+    setFormErr("");
   }
 
   function stopLive() {
@@ -184,10 +186,11 @@ export default function Tickets() {
   }
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); setMsg(""); setBusy(true);
+    e.preventDefault(); setMsg(""); setFormErr(""); setBusy(true);
     const userText = `${form.title}\n\n${form.description}`;
     try {
       const t = await createTicket(form);
+      setFormErr("");
       setModalOpen(false);
       setActive(t.id);
       setActiveTicket(t);
@@ -221,7 +224,11 @@ export default function Tickets() {
         })
         .catch((ex: any) => setMsg(ex.message))
         .finally(() => { stopLive(); setBusy(false); });
-    } catch (ex: any) { setMsg(ex.message); setBusy(false); }
+    } catch (ex: any) {
+      // 建单前的相关性校验失败（不相关）→ 在对话框内展示原因，不关闭弹窗、不建单
+      setFormErr(ex.message || "创建失败");
+      setBusy(false);
+    }
   }
 
   const filtered = useMemo(() => {
@@ -350,9 +357,10 @@ export default function Tickets() {
                 />
               </div>
               <p className="muted" style={{ marginTop: 4 }}>意图类型与风险等级将由后端 Agent 自动判定。</p>
+              {formErr && <div style={{ color: "var(--err)", marginTop: 8 }}>{formErr}</div>}
               <div className="m-actions">
                 <button type="button" className="secondary" onClick={closeNew}>取消</button>
-                <button type="submit" disabled={busy}>创建并运行</button>
+                <button type="submit" disabled={busy}>{busy ? "校验中…" : "创建并运行"}</button>
               </div>
             </form>
           </div>

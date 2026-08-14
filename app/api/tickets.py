@@ -11,7 +11,8 @@ from ..deps import current_user, require_role
 from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
-from ..classifier import classify
+from ..classifier import classify, relevance_check
+from ..config import settings as _settings
 from ..tracelog import trace_call, enabled, log
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
@@ -50,6 +51,12 @@ def _serialize(row) -> dict:
 @router.post("", response_model=TicketOut)
 @trace_call("api.tickets.create_ticket")
 def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
+    # M5 功能1：建单前相关性确认（开关可配，默认开）。不相关 → 拒绝建单并提示。
+    if _settings.input_relevance_check:
+        rel = relevance_check(body.title, body.description)
+        if not rel["relevant"]:
+            raise HTTPException(status_code=422, detail=rel["reason"])
+
     # 意图/风险交由后端 LLM 自动判定（离线时退化为规则兜底），不再由前端指定
     cls = classify(body.title, body.description)
     if enabled():

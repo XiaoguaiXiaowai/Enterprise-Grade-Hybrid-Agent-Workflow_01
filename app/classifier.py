@@ -56,7 +56,6 @@ def _parse_json(text: str) -> dict | None:
     except Exception:
         return None
 
-
 def classify(title: str, description: str) -> dict:
     """返回 {intent_type, risk_level, source, reason}。source: llm | rule"""
     text = f"{title or ''} {description or ''}"
@@ -76,8 +75,8 @@ def classify(title: str, description: str) -> dict:
         try:
             result = chat_with_fallback(
                 [{"role": "user", "content": prompt}],
-                primary_model=settings.classifier_model,
-                fallback_model=settings.classifier_fallback_model,
+                primary_model=settings.relevance_model,
+                fallback_model=settings.relevance_fallback_model,
                 fallback_base_url=settings.ollama_base_url,
                 temperature=0, max_tokens=120,
                 raise_if_reader=True,
@@ -104,3 +103,97 @@ def classify(title: str, description: str) -> dict:
     return {"intent_type": intent, "risk_level": risk,
             "source": "rule",
             "reason": "离线规则判定（LLM 不可用）"}
+
+def relevance_check(title: str, description: str) -> dict:
+    """建单前相关性确认：输入与『企业 IT 工单』领域是否相关。
+
+    返回 {relevant: bool, reason: str, source: str}。LLM 明确判定"不相关"才拒绝
+    （relevant=False）；LLM 不可用/模糊判定时一律放行（relevant=True, source=rule），
+    避免误拦正常工单。
+    """
+    text = f"{title or ''} {description or ''}"
+    prompt = (
+        "你是企业 IT 工单系统的入口校验器。判断用户提交的内容是否属于『企业 IT 工单』"
+        "处理范围（如：IT 故障排查、知识库/运维咨询、账号与权限开通回收、数据查询、"
+        "网络/系统/数据库相关变更等）。\n"
+        "明显不相关的情况（如闲聊、招聘、销售、无关提问）才判为 not_relevant。\n"
+        "只输出一个 JSON 对象，不要输出其他内容，格式：\n"
+        '{"relevant": true, "reason": "一句话理由"}\n'
+        "其中 relevant 取值 true（相关）或 false（不相关）。\n\n"
+        f"标题：{title}\n内容：{description}"
+    )
+
+    if settings.openrouter_api_key:
+        try:
+            log("info", "relevance_check", f"prompt={prompt}")
+            log("info", "relevance_check", f"primary_model={settings.relevance_model}")
+            log("info", "relevance_check", f"fallback_model={settings.relevance_fallback_model}")
+            result = chat_with_fallback(
+                [{"role": "user", "content": prompt}],
+                primary_model=settings.rewrite_model,
+                fallback_model=settings.rewrite_fallback_model,
+                fallback_base_url=settings.ollama_base_url,
+                temperature=0, max_tokens=120,
+                raise_if_reader=True,
+            )
+            log("info", "relevance_check", f"result={result}")
+            data = _parse_json(result.content or "")
+            if enabled():
+                log("info", "relevance_check", f"resp={result.content}")
+                log("info", "relevance_check", f"data={data}")
+            if data and isinstance(data.get("relevant"), bool):
+                return {"relevant": data["relevant"], "reason": data.get("reason", ""),
+                        "source": "llm"}
+        except Exception:
+            pass
+
+    # 规则兜底：命中已知 IT 关键词即视为相关；否则放行（宁放过不误拦）
+    relevant = any(k in text for k in _INTENT_RULES[0][1]) or \
+        any(k in text for k in _RISK_RULES[0][1])
+    # 明显的非 IT 闲聊/无关信号 → 判定不相关（即便 LLM 无返回也能拦截典型闲聊）
+    if not relevant and any(k in text for k in
+                             ("情书", "午饭", "吃什么", "招聘", "买菜", "唱歌", "做饭",
+                              "恋爱", "电影", "旅游", "股票", "聊聊天", "随便聊聊")):
+        return {"relevant": False, "reason": "该内容与『企业 IT 工单』无关",
+                "source": "rule"}
+    return {"relevant": True, "reason": "离线规则：无法确认相关性时放行",
+            "source": "rule"}
+
+def rewrite_content(title: str, description: str) -> dict:
+    """提示词重写：把原始工单内容总结归纳成简洁的目标，再并入提示词。
+
+    返回 {summary, keywords, source}。LLM 不可用时原样返回原始文本，保证流程不中断。
+    """
+    text = f"{title or ''} {description or ''}"
+    prompt = (
+        "你是企业 IT 工单系统的内容整理器。把用户提交的原始工单内容改写为简洁、结构化的"
+        "任务目标，供下游 Agent 使用。要求：\n"
+        "1. 保持原始诉求的关键信息（对象、动作、目标），不增删事实；\n"
+        "2. 用 1-2 句话概括核心任务；\n"
+        "3. 提取 3~6 个关键词（含可能涉及的用户/账号/主机等实体）。\n"
+        "只输出一个 JSON 对象，不要输出其他内容，格式：\n"
+        '{"summary": "简洁任务目标", "keywords": ["kw1", "kw2"]}\n\n'
+        f"标题：{title}\n内容：{description}"
+    )
+
+    if settings.openrouter_api_key:
+        try:
+            result = chat_with_fallback(
+                [{"role": "user", "content": prompt}],
+                primary_model=settings.classifier_model,
+                fallback_model=settings.classifier_fallback_model,
+                fallback_base_url=settings.ollama_base_url,
+                temperature=0, max_tokens=180,
+                raise_if_reader=True,
+            )
+            data = _parse_json(result.content or "")
+            if enabled():
+                log("info", "rewrite_content", f"resp={result.content}")
+                log("info", "rewrite_content", f"data={data}")
+            if data and data.get("summary"):
+                return {"summary": data["summary"],
+                        "keywords": data.get("keywords", []), "source": "llm"}
+        except Exception:
+            pass
+
+    return {"summary": text, "keywords": [], "source": "rule"}

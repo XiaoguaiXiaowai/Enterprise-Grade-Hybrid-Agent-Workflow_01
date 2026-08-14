@@ -18,6 +18,8 @@ from .guards import is_duplicate, should_stop, fingerprint
 from .llm_gateway import get_llm
 from .model_router import route
 from . import agents_runner
+from .classifier import rewrite_content
+from .config import settings as _settings
 agents_runner.atrace.install()  # 幂等：把 SDK trace 重定向到本地 SQLite
 from .skills import registry
 from .skills import kb as _kb, user_dir as _ud, grant as _gr  # noqa: F401 注册工具
@@ -45,12 +47,12 @@ def _parse_tool_calls(plan_text: str) -> list[dict]:
     return calls
 
 
-def _route_params(ticket, tool: str) -> dict:
+def _route_params(ticket, tool: str, goal: str | None = None) -> dict:
     txt = f"{ticket['title']} {ticket['description']}"
     if tool in ("search_kb",):
-        return {"query": txt}
+        return {"query": goal or txt}
     if tool in ("query_user_dir", "grant_db_readonly", "revoke_db_readonly"):
-        m = re.search(r"u-\d+", txt)
+        m = re.search(r"u-\d+", goal or txt)
         return {"principal": m.group(0) if m else "u-1001"}
     return {}
 
@@ -136,10 +138,8 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
 
     if enabled():
         log("info", "run_ticket",f"routing={routing}")
-        log("info", "run_ticket",f"llm={llm}")
         log("info", "run_ticket",f"budget={budget.left}")
         log("info", "run_ticket",f"tools_allowed={tools_allowed}")
-        
         log("info", "run_ticket",f"ticket={ticket}")
 
     # 恢复模式：批准过的高危工具 → 直接执行
@@ -150,9 +150,20 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
             resume_call = {"tool": ap["tool_name"], "params": json.loads(ap["params_json"])}
 
     try:
+        # M5 功能2：提示词重写——不直接并入原始工单内容，先用 LLM 总结归纳成目标。
+        goal = None
+        if _settings.prompt_rewrite:
+            rw = rewrite_content(ticket["title"], ticket["description"])
+            goal = rw["summary"]
+            daos.add_event(ticket_id, "rewrite",
+                           {"summary": rw["summary"], "keywords": rw["keywords"],
+                            "source": rw["source"]}, actor)
+            if enabled():
+                log("info", "run_ticket", f"rewrite={rw}")
+
         ctx = assemble({"id": ticket["id"], "title": ticket["title"],
                         "status": ticket["status"], "risk_level": ticket["risk_level"]},
-                       history, tools_allowed, budget.left, memo=memo)
+                       history, tools_allowed, budget.left, memo=memo, goal=goal)
         daos.add_event(ticket_id, "log", {"routing": routing, "request_id": req_id}, actor)
 
         daos.transition(ticket_id, "agent_running", actor, reason="LOOP 执行")
@@ -262,9 +273,10 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
 
     calls = _parse_tool_calls(plan_text)
     ticket = daos.get_ticket(ticket_id)  # 需标题/描述补全参数
+    goal = ctx.get("goal")
     for c in calls:
         params = c["params"]
-        default_params = _route_params(ticket, c["tool"])
+        default_params = _route_params(ticket, c["tool"], goal=goal)
         merged = {**default_params, **params}  # LLM 显式参数优先，缺失用路由兜底
         _execute_tool(ticket_id, c["tool"], merged, actor, budget, req_id,
                       result.provider, result.model)

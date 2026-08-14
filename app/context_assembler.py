@@ -35,7 +35,7 @@ def _auto_compact(history: list[dict]) -> list[dict]:
 
 
 def assemble(ticket, history: list[dict], tools_allowed: list[str],
-             budget_left: dict, memo: str = "") -> dict:
+             budget_left: dict, memo: str = "", goal: str | None = None) -> dict:
     sel = history[-MAX_HISTORY:] if history else []
     if len(history) > MIN_CTX_TRUNCATE:
         sel = _auto_compact(sel)
@@ -46,7 +46,7 @@ def assemble(ticket, history: list[dict], tools_allowed: list[str],
             tools_spec.append(f"- {t.name}[risk={t.risk}]: {t.description}")
 
     return {
-        "goal": ticket["title"],
+        "goal": goal if goal is not None else ticket["title"],
         "state": ticket["status"],
         "history": [_compress_obs(e.get("content", str(e))) for e in sel],
         "memo": memo,
