@@ -130,22 +130,23 @@ def relevance_check(title: str, description: str) -> dict:
             log("info", "relevance_check", f"fallback_model={settings.relevance_fallback_model}")
             result = chat_with_fallback(
                 [{"role": "user", "content": prompt}],
-                primary_model=settings.rewrite_model,
-                fallback_model=settings.rewrite_fallback_model,
+                primary_model=settings.relevance_model,
+                fallback_model=settings.relevance_fallback_model,
                 fallback_base_url=settings.ollama_base_url,
                 temperature=0, max_tokens=120,
                 raise_if_reader=True,
             )
-            log("info", "relevance_check", f"result={result}")
             data = _parse_json(result.content or "")
             if enabled():
-                log("info", "relevance_check", f"resp={result.content}")
+                log("info", "relevance_check", f"result={result}")
                 log("info", "relevance_check", f"data={data}")
             if data and isinstance(data.get("relevant"), bool):
+                log("info", "relevance_check", "LLM")
                 return {"relevant": data["relevant"], "reason": data.get("reason", ""),
                         "source": "llm"}
         except Exception:
             pass
+            log("info", "relevance_check", "LLM 异常")
 
     # 规则兜底：命中已知 IT 关键词即视为相关；否则放行（宁放过不误拦）
     relevant = any(k in text for k in _INTENT_RULES[0][1]) or \
@@ -154,8 +155,10 @@ def relevance_check(title: str, description: str) -> dict:
     if not relevant and any(k in text for k in
                              ("情书", "午饭", "吃什么", "招聘", "买菜", "唱歌", "做饭",
                               "恋爱", "电影", "旅游", "股票", "聊聊天", "随便聊聊")):
+        log("info", "relevance_check", "规则1")
         return {"relevant": False, "reason": "该内容与『企业 IT 工单』无关",
                 "source": "rule"}
+    log("info", "relevance_check", "规则2")
     return {"relevant": True, "reason": "离线规则：无法确认相关性时放行",
             "source": "rule"}
 
