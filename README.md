@@ -32,30 +32,49 @@
 
 ```mermaid
 flowchart TB
-    subgraph Client["客户端"]
+    classDef entry fill:#e8f1fb,stroke:#3b82f6,color:#1e3a8a
+    classDef gov   fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef mem   fill:#f3e8ff,stroke:#a855f7,color:#4c1d95
+    classDef data  fill:#dcfce7,stroke:#16a34a,color:#14532d
+
+    subgraph client["① 客户端"]
         emp[员工 Browser]
-        adm[管理员/审批人 Browser]
+        adm[管理员 / 审批人 Browser]
     end
 
-    subgraph entry["入口层 · FastAPI / Nginx (HTTPS)"]
+    subgraph entry["② 入口层 · FastAPI / Nginx HTTPS"]
         auth[登录 / 会话 / 租户 / RBAC]
-        risk[输入风险分级 low·mid·high]
+        intake[智能入口<br/>相关性校验 · 意图/风险自动分级]
         api[工单 API + SSE 事件流]
         mon[监控看板 + Trace 回放]
     end
 
-    subgraph harness["Agent Harness 内核（自研治理层 + OpenAI Agents SDK）"]
-        orch[编排器 orchestrator<br/>状态机 · 入口]
-        agents[agents_runner<br/>OpenAI Agents SDK<br/>Agent + Runner]
-        multi[多 Agent 编排 agents_defs<br/>Triage → 子 Agent handoff]
-        hitl[原生 HITL 中断<br/>needs_approval · RunState 恢复]
-        router[模型路由 model_router<br/>RouterProvider  OpenRouter⇄Ollama]
-        guard[守卫 guards<br/>重试 · 停止 · 重复检测]
-        budget[预算 budget<br/>步数 / Token / 时间]
-        skills[工具层 MPC-Skill<br/>白名单 · 参数校验 · 脱敏 · HITL · 幂等]
+    subgraph harness["③ Agent Harness 内核（自研治理层 + OpenAI Agents SDK）"]
+        direction TB
+        subgraph orch_grp["编排"]
+            orch[编排器 orchestrator<br/>状态机 · 入口]
+            cls[classifier<br/>自动分级 · 提示词重写]
+        end
+        subgraph sdk_grp["智能层 · OpenAI Agents SDK"]
+            agents[agents_runner<br/>Agent + Runner]
+            multi[多 Agent 编排<br/>Triage → 子 Agent handoff]
+            hitl[原生 HITL 中断<br/>needs_approval · RunState 恢复]
+        end
+        subgraph model_grp["模型路由"]
+            router[model_router<br/>按意图/风险选模 · 高风险升格]
+            gw[llm_gateway<br/>三级降级 → 离线 reader]
+        end
+        subgraph gov_grp["治理约束与工具"]
+            guard[guards<br/>重试 / 停止 / 重复检测]
+            budget[budget<br/>步数 / Token / 时间]
+            skills[MPC-Skill 工具层<br/>白名单 / 参数校验 / 脱敏 / HITL / 幂等]
+        end
+        orch --> cls
+        orch --> agents
+        orch -. 治理约束 .-> gov_grp
     end
 
-    subgraph memory["记忆五分层"]
+    subgraph memgrp["④ 记忆五分层"]
         sess[Session]
         task[Task State]
         memo[Memory 长期]
@@ -63,7 +82,7 @@ flowchart TB
         trc[Trace 审计]
     end
 
-    subgraph data["数据层 · 本地零成本"]
+    subgraph dt["⑤ 数据层 · 本地零成本"]
         sql[(SQLite<br/>多租户 · RBAC · 指标)]
         fs[(文件系统<br/>artifacts · traces · memory)]
         kb[(知识库<br/>向量 RAG + FTS)]
@@ -71,23 +90,22 @@ flowchart TB
 
     emp --> auth
     adm --> auth
-    auth --> risk
-    risk --> api
+    auth --> intake --> api
     api --> orch
-    orch --> agents
     agents --> multi
     agents --> hitl
-    router --> agents
-    orch --> guard --> budget
+    router --> gw --> agents
     orch --> skills
-    skills --> memory
-    orch --> memory
-    memory --> data
-    data --> sql
-    data --> fs
-    data --> kb
+    skills --> memgrp
+    orch --> memgrp
+    memgrp --> dt
     trc --> mon
     sql --> mon
+
+    class auth,intake,api,mon entry
+    class guard,budget,skills gov
+    class sess,task,memo,art,trc mem
+    class sql,fs,kb data
 ```
 
 ---
@@ -97,8 +115,12 @@ flowchart TB
 ```mermaid
 stateDiagram-v2
     [*] --> created : 员工建单（结构化）
+    note right of created
+        建单前经 LLM 相关性校验：不相关 → 422 拒绝，
+        不进状态机；意图/风险由后端 LLM 自动判定（离线规则兜底）
+    end note
     created --> triaged : 意图分类 + 风险分级
-    triaged --> gathering : 装配上下文 / RAG
+    triaged --> gathering : 装配上下文 / RAG + 提示词重写
     triaged --> failed : 分级失败
     gathering --> agent_running : LOOP 执行
     gathering --> failed

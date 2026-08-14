@@ -181,22 +181,27 @@ def rewrite_content(title: str, description: str) -> dict:
 
     if settings.openrouter_api_key:
         try:
+            log("info", "rewrite_content", f"prompt={prompt}")
+            log("info", "rewrite_content", f"primary_model={settings.rewrite_model}")
+            log("info", "rewrite_content", f"fallback_model={settings.rewrite_fallback_model}")
             result = chat_with_fallback(
                 [{"role": "user", "content": prompt}],
-                primary_model=settings.classifier_model,
-                fallback_model=settings.classifier_fallback_model,
+                primary_model=settings.rewrite_model,
+                fallback_model=settings.rewrite_fallback_model,
                 fallback_base_url=settings.ollama_base_url,
                 temperature=0, max_tokens=180,
                 raise_if_reader=True,
             )
             data = _parse_json(result.content or "")
             if enabled():
-                log("info", "rewrite_content", f"resp={result.content}")
+                log("info", "rewrite_content", f"result={result}")
                 log("info", "rewrite_content", f"data={data}")
             if data and data.get("summary"):
+                log("info", "rewrite_content", "LLM")
                 return {"summary": data["summary"],
                         "keywords": data.get("keywords", []), "source": "llm"}
         except Exception:
+            log("info", "rewrite_content", "LLM 异常")
             pass
-
+    log("info", "rewrite_content", "规则")
     return {"summary": text, "keywords": [], "source": "rule"}
