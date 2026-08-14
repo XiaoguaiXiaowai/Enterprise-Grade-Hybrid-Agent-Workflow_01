@@ -114,28 +114,48 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
+    direction TB
+
+    state "已创建" as created
+    state "已分级" as triaged
+    state "装配中" as gathering
+    state "执行中" as agent_running
+    state "待审批" as awaiting_approval
+    state "继续执行" as running
+    state "已完成" as done
+    state "已失败" as failed
+    state "已取消" as cancelled
+    state "已归档" as archived
+
     [*] --> created : 员工建单（结构化）
     note right of created
-        建单入口顺序：相关性校验（不相关→422 拒绝，不进状态机）
-        → 内容重写 → 意图/风险分类（基于重写后简洁内容，LLM/规则兜底）。
+        建单入口顺序：相关性校验（不相关→422 拒绝，
+        不进状态机）→ 内容重写 → 意图/风险分类
+        （基于重写后简洁内容，LLM/规则兜底）。
         重写结果落 "rewrite" 事件，执行阶段复用为目标。
     end note
+
     created --> triaged : 意图分类 + 风险分级
     triaged --> gathering : 装配上下文 / RAG + 提示词重写
     triaged --> failed : 分级失败
+
     gathering --> agent_running : LOOP 执行
     gathering --> failed
+
     agent_running --> gathering : 需要更多信息
     agent_running --> awaiting_approval : 高风险工具 → HITL 中断
     agent_running --> done : 收敛 done:true + 校验
     agent_running --> failed
-    agent_running --> cancelled : 预算/超时/停止条件
+    agent_running --> cancelled : 预算 / 超时 / 停止条件
+
     awaiting_approval --> running : 审批通过 → 恢复执行
-    awaiting_approval --> cancelled : 驳回
-    awaiting_approval --> gathering : 改方案
+    awaiting_approval --> gathering : 撤回改方案
+    awaiting_approval --> cancelled : 审批驳回
+
     running --> done : 执行完成
     running --> failed
     running --> cancelled
+
     done --> archived : 任务状态归档（只读）
     failed --> archived
     cancelled --> archived
@@ -147,30 +167,29 @@ stateDiagram-v2
 
 ```mermaid
 mindmap
-  root((企业级 Harness))
-    流程定义
+  root((企业级 Agent Harness<br/>8 大工程能力))
+    ① 流程定义
       目标清晰化
       隐性知识沉淀
       Agent vs Workflow
       风险边界
-    业务入口
-      鉴权 PW/SSO
+    ② 业务入口
+      鉴权 密码 / SSO
       租户隔离
-      IAM 权限
+      IAM 最小权限
       输入安全分级
-    核心 LOOP
-      上下文装配 选压截
+    ③ 核心 LOOP
+      上下文装配（选 / 压 / 截）
       模型路由
       四层安全约束
       工具调用纪律
       记忆五分层
       异常处理
-      三重预算
-    业务出口
+    ④ 业务出口
       审批 HITL
-      收敛校验
+      收敛校验 done:true
       交付归档
-    工具层 MPC-Skill
+    ⑤ 工具层 MPC-Skill
       最小权限
       白名单
       参数校验
@@ -178,16 +197,19 @@ mindmap
       HITL 审批
       幂等重试补偿
       审计日志
-    Trace
+    ⑥ Trace
       模型 / 提示词版本
       上下文来源
       工具 · 状态变化
       Token / 延迟 / 重试
-   监控评估
+    ⑦ 监控评估
       成功率
       正确失败率
       延迟 / 成本
       人工接管率
+    ⑧ 预算
+      步数 / Token / 时间
+      触顶终止
 ```
 
 ---
