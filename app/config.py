@@ -23,16 +23,20 @@ class Settings:
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
 
     # 场景一：Agent 编排 / 计划执行（OpenAI Agents SDK 主链路 + 传统网关）
-    agent_model: str = os.getenv("AGENT_MODEL", "openrouter/free")
+    #agent_model: str = os.getenv("AGENT_MODEL", "openrouter/free")
+    agent_model: str = os.getenv("AGENT_MODEL", "")
     agent_fallback_model: str = os.getenv("AGENT_FALLBACK_MODEL", "qwen2.5:7b")
 
     # 场景二：工单意图/风险分类
-    classifier_model: str = os.getenv("CLASSIFIER_MODEL", "openrouter/free")
+    #classifier_model: str = os.getenv("CLASSIFIER_MODEL", "openrouter/free")
+    classifier_model: str = os.getenv("CLASSIFIER_MODEL", "")
     classifier_fallback_model: str = os.getenv("CLASSIFIER_FALLBACK_MODEL", "qwen2.5:7b")
 
     # 路由默认模型（model_router 在未显式/按意图给默认时使用）
-    router_model_default: str = os.getenv("ROUTER_MODEL_DEFAULT", "openrouter/free")
-    router_model_high_risk: str = os.getenv("ROUTER_MODEL_HIGH_RISK", "openrouter/free")
+    #router_model_default: str = os.getenv("ROUTER_MODEL_DEFAULT", "openrouter/free")
+    router_model_default: str = os.getenv("ROUTER_MODEL_DEFAULT", "")
+    #router_model_high_risk: str = os.getenv("ROUTER_MODEL_HIGH_RISK", "openrouter/free")
+    router_model_high_risk: str = os.getenv("ROUTER_MODEL_HIGH_RISK", "")
 
     budget_max_steps: int = int(os.getenv("BUDGET_MAX_STEPS", "25"))
     budget_max_tokens: int = int(os.getenv("BUDGET_MAX_TOKENS", "200000"))
@@ -70,14 +74,14 @@ class Settings:
 
     # 相关性校验专用模型（为空则复用 classifier 模型）
     relevance_model: str = _first_nonempty(
-        "RELEVANCE_MODEL", "CLASSIFIER_MODEL", default="openrouter/free")
+        "RELEVANCE_MODEL", "CLASSIFIER_MODEL", default="")
     relevance_fallback_model: str = _first_nonempty(
-        "RELEVANCE_FALLBACK_MODEL", "CLASSIFIER_FALLBACK_MODEL", default="qwen2.5:7b")
+        "RELEVANCE_FALLBACK_MODEL", "CLASSIFIER_FALLBACK_MODEL", default="")
     # 提示词重写专用模型（为空则复用 classifier 模型）
     rewrite_model: str = _first_nonempty(
-        "REWRITE_MODEL", "CLASSIFIER_MODEL", default="openrouter/free")
+        "REWRITE_MODEL", "CLASSIFIER_MODEL", default="")
     rewrite_fallback_model: str = _first_nonempty(
-        "REWRITE_FALLBACK_MODEL", "CLASSIFIER_FALLBACK_MODEL", default="qwen2.5:7b")
+        "REWRITE_FALLBACK_MODEL", "CLASSIFIER_FALLBACK_MODEL", default="")
 
     @property
     def abs_db_path(self) -> Path:

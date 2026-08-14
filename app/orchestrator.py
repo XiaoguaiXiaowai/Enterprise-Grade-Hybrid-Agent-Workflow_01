@@ -150,14 +150,17 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
             resume_call = {"tool": ap["tool_name"], "params": json.loads(ap["params_json"])}
 
     try:
-        # M5 功能2：提示词重写——不直接并入原始工单内容，先用 LLM 总结归纳成目标。
+        # M5 功能2：提示词重写——建单时已重写并落"rewrite"事件，此处直接复用为目标；
+        # 旧票/未重写时再现场重写一次兜底。
         goal = None
         if _settings.prompt_rewrite:
-            rw = rewrite_content(ticket["title"], ticket["description"])
+            rw = _lookup_rewrite(ticket_id)
+            if rw is None:
+                rw = rewrite_content(ticket["title"], ticket["description"])
+                daos.add_event(ticket_id, "rewrite",
+                               {"summary": rw["summary"], "keywords": rw["keywords"],
+                                "source": rw["source"]}, actor)
             goal = rw["summary"]
-            daos.add_event(ticket_id, "rewrite",
-                           {"summary": rw["summary"], "keywords": rw["keywords"],
-                            "source": rw["source"]}, actor)
             if enabled():
                 log("info", "run_ticket", f"rewrite={rw}")
 
@@ -247,6 +250,19 @@ def _load_memo(tenant_id) -> str:
             "SELECT value_json FROM memory WHERE tenant_id=? AND key='preferences' ORDER BY id DESC LIMIT 1",
             (tenant_id,)).fetchone()
     return row["value_json"] if row else "（暂无长期记忆）"
+
+
+def _lookup_rewrite(ticket_id) -> dict | None:
+    """从事件流取最近一次 'rewrite' 事件（建单阶段持久化的重写结果），不存在返回 None。"""
+    for e in reversed(daos.list_events(ticket_id)):
+        if e["event_type"] == "rewrite":
+            try:
+                payload = json.loads(e["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            if payload.get("summary"):
+                return payload
+    return None
 
 
 @trace_call("orchestrator._plan_and_execute")

@@ -9,7 +9,8 @@ M4 规则：
 """
 from .config import settings
 
-DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+#DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+DEFAULT_OPENROUTER_MODEL = ""
 
 # 意图 -> 默认模型（仅当用户未显式设置 AGENT_MODEL 时生效）
 INTENT_MODELS = {

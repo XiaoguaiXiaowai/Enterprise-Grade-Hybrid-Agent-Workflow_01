@@ -116,8 +116,9 @@ flowchart TB
 stateDiagram-v2
     [*] --> created : 员工建单（结构化）
     note right of created
-        建单前经 LLM 相关性校验：不相关 → 422 拒绝，
-        不进状态机；意图/风险由后端 LLM 自动判定（离线规则兜底）
+        建单入口顺序：相关性校验（不相关→422 拒绝，不进状态机）
+        → 内容重写 → 意图/风险分类（基于重写后简洁内容，LLM/规则兜底）。
+        重写结果落 "rewrite" 事件，执行阶段复用为目标。
     end note
     created --> triaged : 意图分类 + 风险分级
     triaged --> gathering : 装配上下文 / RAG + 提示词重写

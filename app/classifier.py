@@ -56,11 +56,15 @@ def _parse_json(text: str) -> dict | None:
     except Exception:
         return None
 
-def classify(title: str, description: str) -> dict:
-    """返回 {intent_type, risk_level, source, reason}。source: llm | rule"""
-    text = f"{title or ''} {description or ''}"
+def classify(title: str = "", description: str = "", rewritten: str | None = None) -> dict:
+    """返回 {intent_type, risk_level, source, reason}。source: llm | rule
+
+    rewritten 提供时（提示词重写后的简洁目标）将作为分类对象，否则用原始标题+内容。
+    """
+    raw = f"{title or ''} {description or ''}"
+    focus = (rewritten or "").strip() or raw
     prompt = (
-        "你是企业 IT 工单的意图分类与风险分级器。根据工单的标题和内容，判断：\n"
+        "你是企业 IT 工单的意图分类与风险分级器。根据下面的工单文本判断：\n"
         "1. intent_type（意图类型），取值只能是：knowledge（知识咨询）、data_query（数据查询）、"
         "change（变更/授权/开通权限）、troubleshoot（故障排查）之一。\n"
         "2. risk_level（风险等级），取值只能是：low、medium、high 之一。凡涉及开通权限、"
@@ -68,7 +72,7 @@ def classify(title: str, description: str) -> dict:
         "3. reason：一句话说明判定理由。\n"
         "只输出一个 JSON 对象，不要输出其他内容，格式："
         '{"intent_type":"...","risk_level":"...","reason":"..."}\n\n'
-        f"工单标题：{title}\n工单内容：{description}"
+        f"工单文本：{focus}"
     )
 
     if settings.openrouter_api_key:
@@ -99,7 +103,7 @@ def classify(title: str, description: str) -> dict:
         except Exception:
             pass
 
-    intent, risk = _rule_classify(text)
+    intent, risk = _rule_classify(focus)
     return {"intent_type": intent, "risk_level": risk,
             "source": "rule",
             "reason": "离线规则判定（LLM 不可用）"}
@@ -141,12 +145,12 @@ def relevance_check(title: str, description: str) -> dict:
                 log("info", "relevance_check", f"result={result}")
                 log("info", "relevance_check", f"data={data}")
             if data and isinstance(data.get("relevant"), bool):
-                log("info", "relevance_check", "LLM")
+                log("info", "relevance_check", "LLM 判定")
                 return {"relevant": data["relevant"], "reason": data.get("reason", ""),
                         "source": "llm"}
         except Exception:
-            pass
             log("info", "relevance_check", "LLM 异常")
+            pass
 
     # 规则兜底：命中已知 IT 关键词即视为相关；否则放行（宁放过不误拦）
     relevant = any(k in text for k in _INTENT_RULES[0][1]) or \
@@ -155,10 +159,10 @@ def relevance_check(title: str, description: str) -> dict:
     if not relevant and any(k in text for k in
                              ("情书", "午饭", "吃什么", "招聘", "买菜", "唱歌", "做饭",
                               "恋爱", "电影", "旅游", "股票", "聊聊天", "随便聊聊")):
-        log("info", "relevance_check", "规则1")
+        log("info", "relevance_check", "兜底1")
         return {"relevant": False, "reason": "该内容与『企业 IT 工单』无关",
                 "source": "rule"}
-    log("info", "relevance_check", "规则2")
+    log("info", "relevance_check", "兜底2")
     return {"relevant": True, "reason": "离线规则：无法确认相关性时放行",
             "source": "rule"}
 
@@ -197,11 +201,11 @@ def rewrite_content(title: str, description: str) -> dict:
                 log("info", "rewrite_content", f"result={result}")
                 log("info", "rewrite_content", f"data={data}")
             if data and data.get("summary"):
-                log("info", "rewrite_content", "LLM")
+                log("info", "rewrite_content", "LLM 判定")
                 return {"summary": data["summary"],
                         "keywords": data.get("keywords", []), "source": "llm"}
         except Exception:
             log("info", "rewrite_content", "LLM 异常")
             pass
-    log("info", "rewrite_content", "规则")
+    log("info", "rewrite_content", "兜底")
     return {"summary": text, "keywords": [], "source": "rule"}
