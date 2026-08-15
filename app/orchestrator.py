@@ -140,7 +140,8 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
         log("info", "run_ticket",f"routing={routing}")
         log("info", "run_ticket",f"budget={budget.left}")
         log("info", "run_ticket",f"tools_allowed={tools_allowed}")
-        log("info", "run_ticket",f"ticket={ticket}")
+        log("info", "run_ticket",f"history={history}")
+        log("info", "run_ticket",f"memo={memo}")
 
     # 恢复模式：批准过的高危工具 → 直接执行
     resume_call = None
@@ -179,6 +180,8 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
             try:
                 sdk_result = agents_runner.run_sdk(
                     ticket_id, ctx, actor, budget, routing, req_id=req_id)
+                if enabled():
+                    log("info", "run_ticket", f"agents_runner.sdk_ok -- sdk_result={sdk_result}")
             except agents_runner.SdkUnavailable:
                 # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
                 _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
@@ -194,6 +197,8 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                                 "model": sdk_result["model"]}, actor)
         else:
             _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
+            if enabled():
+                log("info", "run_ticket", f"agents_runner.sdk_not_ok -- plan_and_execute")
 
         # 收敛：设置 done
         daos.transition(ticket_id, "done", actor, reason="收敛: done:true + 校验通过")

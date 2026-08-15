@@ -166,50 +166,67 @@ stateDiagram-v2
 ## 8 大能力 → Demo 映射图
 
 ```mermaid
-mindmap
-  root((企业级 Agent Harness<br/>8 大工程能力))
-    ① 流程定义
-      目标清晰化
-      隐性知识沉淀
-      Agent vs Workflow
-      风险边界
-    ② 业务入口
-      鉴权 密码 / SSO
-      租户隔离
-      IAM 最小权限
-      输入安全分级
-    ③ 核心 LOOP
-      上下文装配（选 / 压 / 截）
-      模型路由
-      四层安全约束
-      工具调用纪律
-      记忆五分层
-      异常处理
-    ④ 业务出口
-      审批 HITL
-      收敛校验 done:true
-      交付归档
-    ⑤ 工具层 MPC-Skill
-      最小权限
-      白名单
-      参数校验
-      脱敏
-      HITL 审批
-      幂等重试补偿
-      审计日志
-    ⑥ Trace
-      模型 / 提示词版本
-      上下文来源
-      工具 · 状态变化
-      Token / 延迟 / 重试
-    ⑦ 监控评估
-      成功率
-      正确失败率
-      延迟 / 成本
-      人工接管率
-    ⑧ 预算
-      步数 / Token / 时间
-      触顶终止
+flowchart LR
+  classDef root fill:#0f172a,stroke:#0ea5e9,color:#fff,stroke-width:2px
+  classDef cap1 fill:#1d4ed8,stroke:#1e40af,color:#fff,stroke-width:1px
+  classDef cap2 fill:#0e7490,stroke:#155e75,color:#fff,stroke-width:1px
+  classDef cap3 fill:#15803d,stroke:#166534,color:#fff,stroke-width:1px
+  classDef cap4 fill:#b45309,stroke:#92400e,color:#fff,stroke-width:1px
+  classDef cap5 fill:#6d28d9,stroke:#5b21b6,color:#fff,stroke-width:1px
+  classDef cap6 fill:#be185d,stroke:#9d174d,color:#fff,stroke-width:1px
+  classDef cap7 fill:#c2410c,stroke:#9a3412,color:#fff,stroke-width:1px
+  classDef cap8 fill:#475569,stroke:#334155,color:#fff,stroke-width:1px
+  classDef leaf1 fill:#dbeafe,stroke:#93c5fd,color:#1e3a8a
+  classDef leaf2 fill:#cffafe,stroke:#67e8f9,color:#164e63
+  classDef leaf3 fill:#dcfce7,stroke:#86efac,color:#14532d
+  classDef leaf4 fill:#fef3c7,stroke:#fde68a,color:#78350f
+  classDef leaf5 fill:#ede9fe,stroke:#c4b5fd,color:#4c1d95
+  classDef leaf6 fill:#fce7f3,stroke:#f9a8d4,color:#831843
+  classDef leaf7 fill:#ffedd5,stroke:#fdba74,color:#7c2d12
+  classDef leaf8 fill:#f1f5f9,stroke:#cbd5e1,color:#334155
+
+  root(("企业级 Agent Harness<br/>8 大工程能力"))
+
+  c1((① 流程定义)); c2((② 业务入口)); c3((③ 核心 LOOP)); c4((④ 业务出口))
+  c5((⑤ 工具层 MPC-Skill)); c6((⑥ Trace)); c7((⑦ 监控评估)); c8((⑧ 预算))
+
+  a1[目标清晰化]; a2[隐性知识沉淀]; a3[Agent vs Workflow]; a4[风险边界]
+  root --> c1 --> a1 & a2 & a3 & a4
+
+  b1[鉴权 密码 / SSO]; b2[租户隔离]; b3[IAM 最小权限]; b4[输入安全分级]
+  root --> c2 --> b1 & b2 & b3 & b4
+
+  d1[上下文装配（选 / 压 / 截）]; d2[模型路由]; d3[四层安全约束]; d4[工具调用纪律]
+  d5[记忆五分层]; d6[异常处理]
+  root --> c3 --> d1 & d2 & d3 & d4 & d5 & d6
+
+  e1[审批 HITL]; e2[收敛校验 done:true]; e3[交付归档]
+  root --> c4 --> e1 & e2 & e3
+
+  f1[最小权限]; f2[白名单]; f3[参数校验]; f4[脱敏]
+  f5[HITL 审批]; f6[幂等重试补偿]; f7[审计日志]
+  root --> c5 --> f1 & f2 & f3 & f4 & f5 & f6 & f7
+
+  g1[模型 / 提示词版本]; g2[上下文来源]; g3[工具 · 状态变化]; g4[Token / 延迟 / 重试]
+  root --> c6 --> g1 & g2 & g3 & g4
+
+  h1[成功率]; h2[正确失败率]; h3[延迟 / 成本]; h4[人工接管率]
+  root --> c7 --> h1 & h2 & h3 & h4
+
+  i1[步数 / Token / 时间]; i2[触顶终止]
+  root --> c8 --> i1 & i2
+
+  class root root
+  class c1 cap1; class c2 cap2; class c3 cap3; class c4 cap4
+  class c5 cap5; class c6 cap6; class c7 cap7; class c8 cap8
+  class a1,a2,a3,a4 leaf1
+  class b1,b2,b3,b4 leaf2
+  class d1,d2,d3,d4,d5,d6 leaf3
+  class e1,e2,e3 leaf4
+  class f1,f2,f3,f4,f5,f6,f7 leaf5
+  class g1,g2,g3,g4 leaf6
+  class h1,h2,h3,h4 leaf7
+  class i1,i2 leaf8
 ```
 
 ---

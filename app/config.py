@@ -25,12 +25,12 @@ class Settings:
     # 场景一：Agent 编排 / 计划执行（OpenAI Agents SDK 主链路 + 传统网关）
     #agent_model: str = os.getenv("AGENT_MODEL", "openrouter/free")
     agent_model: str = os.getenv("AGENT_MODEL", "")
-    agent_fallback_model: str = os.getenv("AGENT_FALLBACK_MODEL", "qwen2.5:7b")
+    agent_fallback_model: str = os.getenv("AGENT_FALLBACK_MODEL", "")
 
     # 场景二：工单意图/风险分类
     #classifier_model: str = os.getenv("CLASSIFIER_MODEL", "openrouter/free")
     classifier_model: str = os.getenv("CLASSIFIER_MODEL", "")
-    classifier_fallback_model: str = os.getenv("CLASSIFIER_FALLBACK_MODEL", "qwen2.5:7b")
+    classifier_fallback_model: str = os.getenv("CLASSIFIER_FALLBACK_MODEL", "")
 
     # 路由默认模型（model_router 在未显式/按意图给默认时使用）
     #router_model_default: str = os.getenv("ROUTER_MODEL_DEFAULT", "openrouter/free")
