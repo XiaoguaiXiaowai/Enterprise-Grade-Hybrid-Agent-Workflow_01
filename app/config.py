@@ -67,6 +67,31 @@ class Settings:
     # ===== 整改⑦：函数级日志目录（相对项目根或绝对路径）=====
     log_dir: str = os.getenv("LOG_DIR", "logs")
 
+    # ===== RAG 检索增强（整改⑧）=====
+    # 重排序（rerank）：主用 OpenRouter /api/v1/rerank，兜底 Ollama（探测 /api/rerank，不可用自动降级）
+    rerank_enabled: bool = os.getenv("RERANK_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    rerank_model: str = os.getenv(
+        "RERANK_MODEL", "nvidia/llama-nemotron-rerank-vl-1b-v2:free")
+    rerank_base_url: str = os.getenv(
+        "RERANK_BASE_URL", "https://openrouter.ai/api/v1")
+    # 兜底：Ollama rerank（bce-reranker-base_v1 等）；Ollama 无原生 /api/rerank 时静默降级为不精排
+    rerank_fallback_model: str = os.getenv(
+        "RERANK_FALLBACK_MODEL", "bce-reranker-base_v1")
+    rerank_fallback_base_url: str = os.getenv(
+        "RERANK_FALLBACK_BASE_URL", "http://127.0.0.1:11434")
+    # 精排候选数：召回先放大到 top_k × 该倍数，再 rerank 取前 top_k
+    rerank_recall_factor: int = int(os.getenv("RERANK_RECALL_FACTOR", "4"))
+
+    # 查询改写（检索前先让 LLM 把口语化说法改写为利于检索的关键词；默认关，涉及额外 LLM 调用）
+    query_rewrite_enabled: bool = os.getenv(
+        "RAG_QUERY_REWRITE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    # 动态加权 RRF / 意图路由（按查询特征调整向量 vs 关键词权重；默认关保持原行为）
+    adaptive_rerank_weight: bool = os.getenv(
+        "RAG_ADAPTIVE_WEIGHT", "false").lower() in ("1", "true", "yes", "on")
+    # 检索结果是否携带父块文本（small-to-big：命中子块时带回所属大块，供上下文更完整）
+    return_parent_chunk: bool = os.getenv(
+        "RAG_RETURN_PARENT", "false").lower() in ("1", "true", "yes", "on")
+
     # 向量知识库（本地 RAG）：主用 OpenRouter embedding，兜底 Ollama bge-m3，LanceDB 存向量
     vector_db_path: str = os.getenv("VECTOR_DB_PATH", "data/vector-kb")
     # 主用 embedding（OpenRouter）：默认 nvidia/nemotron-3-embed-1b:free，端点独立可配
@@ -80,6 +105,16 @@ class Settings:
     vector_chunk_size: int = int(os.getenv("VECTOR_CHUNK_SIZE", "500"))
     vector_chunk_overlap: int = int(os.getenv("VECTOR_CHUNK_OVERLAP", "200"))
     vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "3"))
+    # 小到大人块尺寸（small-to-big）：子块按 VECTOR_CHUNK_SIZE，父块按此尺寸；0 = 整篇文档作父块
+    vector_parent_chunk_size: int = int(os.getenv("VECTOR_PARENT_CHUNK_SIZE", "1500"))
+    # ANN 索引开关 + 参数（小库用精确扫描更快更准，默认关；数据量大再开，如 IVF_HNSW_SQ）
+    vector_ann_enabled: bool = os.getenv(
+        "VECTOR_ANN_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    vector_ann_index_type: str = os.getenv("VECTOR_ANN_INDEX_TYPE", "IVF_PQ")
+    vector_ann_metric: str = os.getenv("VECTOR_ANN_METRIC", "cosine")
+    # 维度不一致时告警并拒绝写入（防 embedding 模型切换导致索引损坏）
+    vector_embed_dim_check: bool = os.getenv(
+        "VECTOR_EMBED_DIM_CHECK", "true").lower() in ("1", "true", "yes", "on")
 
     # ===== 建单输入校验 / 提示词重写（M5）=====
     # 建单时先用 LLM 确认输入与 IT 工单领域是否相关（默认开）

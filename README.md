@@ -268,3 +268,41 @@ flowchart LR
   ```
 - 埋点位置：所有 API 端点（`app/api/*.py`，经 `app/main.py` 中间件记录请求→函数）＋编排核心（`app/orchestrator.py` 的 `run_ticket`/`resume_ticket`/`_run_loop`/`_plan_and_execute`/`_execute_tool`）。
 - 与 DB `traces`/`ticket_events`/`tool_calls` 表互补：DB 存业务/trace 数据用于回放，日志给实时函数级调用链。
+
+---
+
+## RAG 检索增强（整改⑧）
+
+企业知识库检索链路升级为「查询改写(可选) → 双路召回 → RRF 融合 → rerank 精排」，并补齐数据生命周期与评测基线。
+
+**检索流水线**（`app/kb.py` → `app/vector_kb.py` + `app/rerank.py`）：
+
+```
+query ──(可选 LLM 查询改写)──► 向量召回(LanceDB) ─┐
+                                 关键词召回(FTS5+LIKE) ─┴─► RRF 融合 ──► rerank 精排 ──► top_k
+```
+
+**① 分块 small-to-big**：子块（`VECTOR_CHUNK_SIZE=500`，用于检索命中）+ 父块（`VECTOR_PARENT_CHUNK_SIZE=1500`，命中时携带的大上下文，`RAG_RETURN_PARENT` 控制是否返回）；并从 `第X章 / X.X / # 标题` 样式行提取结构化 `path` 元数据（如 `目的 > 1 申请与业务审批`）。
+
+**② 召回优化**：
+- LLM 查询改写（`RAG_QUERY_REWRITE_ENABLED`，默认关）：口语化提问 → 检索友好关键词，失败自动回落原文；
+- 自适应加权 RRF（`RAG_ADAPTIVE_WEIGHT`，默认关）：术语/编号型查询上调关键词权重、口语长句上调向量权重。
+
+**③ 重排序（rerank）**：
+- 主用 OpenRouter `POST /api/v1/rerank`（默认 `nvidia/llama-nemotron-rerank-vl-1b-v2:free`）；
+- 兜底 Ollama `/api/rerank`（配置 `bce-reranker-base_v1`）：**注意**——当前 Ollama 主线（≤0.32.x）无原生 rerank 端点（404），实现为「探测一次 + 优雅降级」：探测可用则用，不可用自动降级为 RRF 顺序，绝不中断检索链路；
+- 召回候选先放大 `RERANK_RECALL_FACTOR` 倍再精排取 top_k。
+
+**④ 索引与数据生命周期**：
+- 增量维护：`add_document`/`delete_document` 走「向量 upsert/delete + FTS 行级同步」，不再整库重建（`rebuild_indexes` 保留给 seed）；
+- tag 元数据过滤：`search(query, top_k, tag=...)` 向量路与关键词路都按 tag 过滤（企业多业务线隔离）；
+- embedding 维度漂移校验（`VECTOR_EMBED_DIM_CHECK`，默认开）：主/兜底模型维度不一致直接报错，防写坏索引；
+- ANN 近似索引开关（`VECTOR_ANN_ENABLED`，默认关）：小库精确扫描更快更准；数据量上来后开（`IVF_PQ` / `IVF_HNSW_SQ`）。
+
+**⑤ 评测基线**：`scripts/eval_rag.py` 基于真实播种文档（IT-SOP-001 / IT-SEC-002 / IT-CHG-003）标注 16 条查询，计算 recall@1/3、MRR、nDCG@3：
+```bash
+.venv/bin/python scripts/eval_rag.py --compare   # rerank on/off 对比
+.venv/bin/python scripts/eval_rag.py --detail    # 打印每条命中明细
+```
+实测对比（16 条查询）：rerank 开启后 **recall@1 0.812 → 1.000（+18.8%）**，MRR 0.896 → 1.000，nDCG@3 0.923 → 1.000。
+
