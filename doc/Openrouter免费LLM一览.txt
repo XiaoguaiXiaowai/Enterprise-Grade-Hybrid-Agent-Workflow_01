@@ -1,0 +1,30 @@
+# --- 免费非推理模型列表 ---
+#    NVIDIA: Nemotron 3.5 Lightning (free)​ — 面向高吞吐量代理工作负载，描述中未提及推理能力。（nvidia/nemotron-3.5-lightning:free）
+#    NVIDIA: Nemotron 3.5 Content Safety (free)​ — 安全护栏/内容审核模型，属分类任务模型，非推理模型。（nvidia/nemotron-3.5-content-safety:free）
+#    NVIDIA: Nemotron 3 Super (free)​ — 复杂多代理应用模型，描述未明确标注为推理/思考模型。（nvidia/nemotron-3-super-120b-a12b:free）
+#    NVIDIA: Nemotron 3 Nano 30B A3B (free)​ — 轻量级 MoE 小模型，专注构建专用代理系统，未提及推理。（nvidia/nemotron-3-nano-30b-a3b:free）
+#    Poolside: Laguna S 2.1 (free)​ — 编码代理模型，专注软件工程，描述中未提及推理。（poolside/laguna-s-2.1:free）
+
+# --- 免费推理模型列表 ---
+#    Dots Studio: Dots3-Note（dots-studio/dots-3-note-preview:free） 
+#        Preview Dots Studio 推出的开源 MoE 模型，总参数量 280B，激活参数 16B，是 Dots 3 家族最轻量的成员。描述中明确标注"suited for reasoning"，同时擅长编码、多模态理解、长上下文处理和多步代理工作流。上下文窗口 512K，输入输出均免费。
+#    LiquidAI: LFM2.5-2.6B（liquid/lfm-2.5-2.6b:free）
+#        Liquid AI 的紧凑型推理模型，参数量仅 2.6B，非常轻量。适合代理工作流、数据提取、RAG 和长上下文处理。Liquid 官方建议不要将其用于代理编码或知识密集型任务。上下文窗口 128K，输入输出免费。
+#    Poolside: Laguna XS 2.1（poolside/laguna-s-2.1:free）
+#        Poolside 最新编码代理模型，33B 总参数量、3B 激活参数（A3B 架构）。描述中明确提到"combines tool calling and reasoning capabilities"，融合了工具调用与推理能力。上下文窗口 256K，最多支持 32K 输出 token，采用 FP8 量化以提升推理速度，适合编码工作流。
+#    Cohere: North Mini Code（cohere/north-mini-code:free）
+#        Cohere 首款代理编码模型，也是 North 家族的开山之作。30B 总参数、3B 激活参数的稀疏 MoE 模型，描述中提到"supports interleaved reasoning and tool use via JSON schema"，即支持推理与工具调用的交织使用。上下文窗口 256K，最多 64K 输出 token，采用 Apache 2.0 开源协议，可在本地硬件上运行。
+#    NVIDIA: Nemotron 3 Ultra（nvidia/nemotron-3-ultra-550b-a55b:free）
+#        NVIDIA 的开源前沿推理与编排模型，550B 总参数、55B 激活参数（MoE），基于混合 Transformer-Mamba 架构。描述中明确标为"frontier-reasoning and orchestration model"，尤其擅长多步推理和规划。上下文窗口 1M，适合长时间运行的代理工作流、深度研究和复杂企业任务。
+#    NVIDIA: Nemotron 3 Nano Omni（nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free）
+#        30B-A3B 的开源多模态模型，定位为企业代理系统中的感知与上下文子代理。支持文本、图片、视频、音频输入，输出文本。描述中提到"extended thinking enabled via reasoning.enabled on OpenRouter"，即可通过配置开启扩展思考模式。上下文窗口 256K，推理预算最高 16,384 token。
+#    Google: Gemma 4 26B A4B（google/gemma-4-26b-a4b-it:free）
+#        Google DeepMind 的指令微调 MoE 模型，总参数量 25.2B，每 token 仅激活 3.8B 参数。描述中明确提到"configurable thinking/reasoning mode"，支持可配置的思考/推理模式。支持多模态输入（文本、图片、最长 60 秒视频），上下文窗口 262K，具备原生函数调用和结构化输出能力，Apache 2.0 协议。
+#    Google: Gemma 4 31B（google/gemma-4-31b-it:free）
+#        Google DeepMind 的稠密多模态模型，参数量 30.7B，同样支持"configurable thinking/reasoning mode"。支持文本和图片输入、文本输出，上下文窗口 262K，原生函数调用，覆盖 140+ 种语言。Apache 2.0 协议。
+#    NVIDIA: Nemotron Nano 12B 2 VL（nvidia/nemotron-nano-12b-v2-vl:free）
+#        12B 参数的开源多模态推理模型，专门面向视频理解和文档智能。采用混合 Transformer-Mamba 架构，描述中明确称为"open multimodal reasoning model"。支持文本和多图片文档输入，在 OCRBench v2 等基准上表现领先，支持 Efficient Video Sampling 处理长视频。上下文窗口 128K。
+#    NVIDIA: Nemotron Nano 9B V2（nvidia/nemotron-nano-9b-v2:free）
+#        NVIDIA 从头训练的 9B 参数大语言模型，描述中明确说明"designed as a unified model for both reasoning and non-reasoning tasks"，即同一模型可兼顾推理和非推理任务，推理能力可通过系统提示控制。上下文窗口 128K。
+#    OpenAI: gpt-oss-20b（openai/gpt-oss-20b:free）
+#        OpenAI 开源的最新模型，21B 参数 MoE 架构，每轮前向传播激活 3.6B 参数。描述中提到"supports reasoning level configuration"，即可配置推理级别。采用 Harmony 响应格式，支持函数调用、工具使用和结构化输出，上下文窗口 131K，Apache 2.0 协议发布，适合消费级或单 GPU 部署。

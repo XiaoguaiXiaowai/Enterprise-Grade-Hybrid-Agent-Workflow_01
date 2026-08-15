@@ -10,8 +10,10 @@ import json
 from datetime import datetime, timedelta
 
 from .db import session
+from .config import settings
 
-WINDOW_MINUTES = 5
+# 去重窗口（分钟）外部化（整改②：DEDUP_WINDOW_MINUTES）
+WINDOW_MINUTES = settings.dedup_window_minutes
 
 
 def fingerprint(scope: str, tool_name: str, params: dict) -> str:

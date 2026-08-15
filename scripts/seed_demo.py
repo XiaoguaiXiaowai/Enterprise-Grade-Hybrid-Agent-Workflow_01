@@ -1,6 +1,9 @@
 """造演示数据：账密、知识库、几类示例工单。幂等可重复执行。"""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 演示脚本强制非生产环境（整改⑥：APP_ENV=production 时 auth.seed_users 不再自动播种）
+os.environ.setdefault("APP_ENV", "development")
+os.environ.setdefault("SEED_USER_PASSWORD", "demo-pass-2026")  # 演示脚本专用；生产勿写死
 os.environ.setdefault("APP_DB_PATH", "data/app.db")
 
 from app.db import init_db, session
@@ -53,7 +56,8 @@ def main():
         daos.add_event(tid, "created", {"title": t["title"]}, "seed")
         print(f" - 工单 #{tid}: {t['title']} ({t['risk_level']})")
 
-    print("演示数据就绪。ERP 演示账户: admin / operator / employee (pass123)")
+    print(f"演示数据就绪。ERP 演示账户: admin / operator / employee"
+          f"（密码 = {os.environ['SEED_USER_PASSWORD']}，可用 SEED_USER_PASSWORD 覆盖）")
 
 
 if __name__ == "__main__":

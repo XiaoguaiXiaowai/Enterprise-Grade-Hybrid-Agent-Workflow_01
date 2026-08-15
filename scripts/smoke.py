@@ -1,6 +1,7 @@
 """M1 冒烟测试：初始化 DB → 播种 → 登录 → 建单 → 跑低风险工单 → 校验状态与事件。"""
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault("APP_ENV", "development")  # 演示脚本强制非生产，播种才生效（整改⑥）
 
 from app.db import init_db
 from app.api.auth import seed_users

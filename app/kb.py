@@ -5,7 +5,9 @@
 - RRF（倒数排名融合）：两条路同时跑，按"排名"而非原始分值合并打分，
   两路结果互为补充、互不吞没；向量不可用或没索引时自动退化为纯 FTS。
 - search/search_simple 签名保持不变，上层工具无需改动。
+- top_k 缺省引用配置 VECTOR_TOP_K（整改②），不再写死 3。
 """
+from .config import settings
 from .db import session
 from . import vector_kb
 
@@ -79,12 +81,18 @@ def delete_document(doc_id: int) -> bool:
     return True
 
 
-def search(query: str, top_k: int = 3) -> list[dict]:
+def _resolve_top_k(top_k: int | None) -> int:
+    """top_k 缺省引用配置 VECTOR_TOP_K（整改②）。"""
+    return settings.vector_top_k if top_k is None else top_k
+
+
+def search(query: str, top_k: int | None = None) -> list[dict]:
     """混合检索：向量 + 关键词（FTS5 主、LIKE 兜底）两路 RRF 融合。
 
     - 中文场景 FTS5 MATCH 常为空串，故关键词路对中文用 2-gram LIKE 兜底。
     - 向量不可用时退化为纯关键词路。
     """
+    top_k = _resolve_top_k(top_k)
     vec = _vector_hits(query, top_k)
     kw = _keyword_hits(query, top_k)
     if vec:
@@ -92,21 +100,24 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     return kw
 
 
-def _keyword_hits(query: str, top_k: int = 3) -> list[dict]:
+def _keyword_hits(query: str, top_k: int | None = None) -> list[dict]:
+    top_k = _resolve_top_k(top_k)
     hits = _fts(query, top_k)
     if hits:
         return hits
     return _like(query, top_k)
 
 
-def search_simple(query: str, top_k: int = 3) -> list[dict]:
+def search_simple(query: str, top_k: int | None = None) -> list[dict]:
     """FTS 不可用/无匹配时兜底：按空格分词，命中任意关键词即返回。"""
+    top_k = _resolve_top_k(top_k)
     if not _fts(query, top_k):
         return _like(query, top_k)
     return _fts(query, top_k)
 
 
-def _vector_hits(query: str, top_k: int = 3) -> list[dict]:
+def _vector_hits(query: str, top_k: int | None = None) -> list[dict]:
+    top_k = _resolve_top_k(top_k)
     if not vector_kb.vector_enabled():
         return []
     try:
@@ -137,7 +148,8 @@ def _rrf_merge(vec: list[dict], fts: list[dict], top_k: int) -> list[dict]:
     return merged[:top_k]
 
 
-def _fts(query: str, top_k: int = 3) -> list[dict]:
+def _fts(query: str, top_k: int | None = None) -> list[dict]:
+    top_k = _resolve_top_k(top_k)
     try:
         with session() as conn:
             rows = conn.execute(
@@ -148,8 +160,9 @@ def _fts(query: str, top_k: int = 3) -> list[dict]:
         return []
 
 
-def _like(query: str, top_k: int = 3) -> list[dict]:
+def _like(query: str, top_k: int | None = None) -> list[dict]:
     """关键词兜底：按分隔拆词，任一词作为独立子串命中即返回（含中文整词）。"""
+    top_k = _resolve_top_k(top_k)
     import re as _re
     words = [w for w in _re.split(r"[\s，。、;；,，]+", query) if w]
     # 中文整句拆不出有意义的短词时，退化为对"名+动"等实义子串做匹配：

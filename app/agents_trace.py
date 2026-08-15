@@ -99,6 +99,7 @@ class LocalTraceProcessor(TracingProcessor):
         pass
 
     def _write(self, trace) -> None:
+        from .agents_runner import PROMPT_VERSION  # 运行期导入，避免模块加载期环（整改⑤）
         meta = self._traces.get(trace.trace_id, {}).get("metadata", {})
         ticket_id = meta.get("ticket_id")
         if ticket_id is None:
@@ -114,7 +115,7 @@ class LocalTraceProcessor(TracingProcessor):
             ticket_id=int(ticket_id),
             model=model,
             provider=meta.get("provider", "openrouter"),
-            prompt_version=meta.get("prompt_version", "M4-agents"),
+            prompt_version=meta.get("prompt_version", PROMPT_VERSION),
             io={"final_output": meta.get("final_output", ""),
                 "workflow": meta.get("workflow", ""),
                 "spans": _summary(spans)},

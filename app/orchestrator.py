@@ -25,7 +25,7 @@ from .skills import registry
 from .skills import kb as _kb, user_dir as _ud, grant as _gr  # noqa: F401 注册工具
 from .tracelog import enabled, log
 
-PROMPT_VERSION = "M2-v1"
+# Trace 版本号单一来源：agents_runner.PROMPT_VERSION（整改⑤，删除原 M2-v1 重复常量）
 
 
 def _parse_tool_calls(plan_text: str) -> list[dict]:
@@ -286,7 +286,8 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
 
     trace_mod.write(req_id, ticket_id,
                     model=result.model, provider=result.provider,
-                    prompt_version=PROMPT_VERSION, io={"plan": plan_text},
+                    prompt_version=agents_runner.PROMPT_VERSION,
+                    io={"plan": plan_text},
                     state_before=before, state_after=ticket_status(ticket_id),
                     latency_ms=result.latency_ms, token_usage=result.usage,
                     context_source="assemble")
@@ -336,7 +337,7 @@ def _execute_tool(ticket_id, tool, params, actor, budget, req_id, provider, mode
     key = fingerprint(f"ticket:{ticket_id}", tool, params)
     daos.record_tool_call(ticket_id, tool, params, resp.get("result", resp), status, key, latency)
     trace_mod.write(req_id, ticket_id, model=model, provider=provider,
-                    prompt_version=PROMPT_VERSION, tool_name=tool,
+                    prompt_version=agents_runner.PROMPT_VERSION, tool_name=tool,
                     io={"params": params, "result": resp.get("result", resp)},
                     state_before=before, state_after=ticket_status(ticket_id),
                     latency_ms=latency, context_source="tool")
@@ -355,10 +356,34 @@ def ticket_status(ticket_id) -> str:
 def _record_metrics(ticket_id, intent_type, success=False, correct_failure=False,
                     human_takeover=False):
     t = daos.get_ticket(ticket_id)
-    cost = 0.0
-    latency = 0
     try:
+        latency, cost = _accumulate_metrics(ticket_id)
         metrics_mod.record(ticket_id, success=success, correct_failure=correct_failure,
                            latency_ms=latency, cost=cost, human_takeover=human_takeover)
     except Exception:
-        pass
+        pass  # 指标失败不影响工单主流程
+
+
+def _accumulate_metrics(ticket_id) -> tuple[int, float]:
+    """从 traces 累计真实延迟与成本（整改④：修复原 latency=0/cost=0 写死）。
+
+    - latency：traces.latency_ms 累加（每次模型/工具调用实测毫秒）
+    - cost：token 用量 × 单价（LLM_COST_PER_1M_TOKENS 可配；默认 0=未定价，
+      单价配置后即为按 token 用量的成本估算）
+    """
+    with db_session() as conn:
+        rows = conn.execute(
+            "SELECT latency_ms, token_usage_json FROM traces WHERE ticket_id=?",
+            (ticket_id,)).fetchall()
+    latency = sum(int(r["latency_ms"] or 0) for r in rows)
+    cost = 0.0
+    unit = _settings.llm_cost_per_1m_tokens
+    for r in rows:
+        try:
+            usage = json.loads(r["token_usage_json"] or "{}")
+        except Exception:
+            usage = {}
+        tokens = usage.get("total_tokens") or (
+            (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0))
+        cost += (tokens or 0) * unit / 1_000_000
+    return latency, round(cost, 6)

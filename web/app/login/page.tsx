@@ -6,7 +6,7 @@ import { login } from "@/lib/api";
 export default function Login() {
   const router = useRouter();
   const [u, setU] = useState("admin");
-  const [p, setP] = useState("pass123");
+  const [p, setP] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -24,7 +24,7 @@ export default function Login() {
     <div className="container" style={{ maxWidth: 400, marginTop: 80 }}>
       <div className="card">
         <h2>企业 IT 工单处理 · 登录</h2>
-        <p className="muted">演示账户：admin / operator / employee，密码均为 pass123</p>
+        <p className="muted">演示环境账户：admin / operator / employee（密码由 SEED_USER_PASSWORD 配置，生产环境不自动播种）</p>
         <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
           <input value={u} onChange={(e) => setU(e.target.value)} placeholder="用户名" />
           <input type="password" value={p} onChange={(e) => setP(e.target.value)} placeholder="密码" />

@@ -140,6 +140,37 @@ def test_chat_fallback_primary_failure():
         g._openai_chat, g._ollama_chat_raw = o1, o2
 
 
+def test_chat_fallback_primary_empty_content_fails_over():
+    """主用返回空 content（推理模型被 max_tokens 截断）→ 视为失败，切 Ollama 兜底。"""
+    import app.llm_gateway as g
+
+    calls = []
+
+    def fake_openai(messages, model, **kw):
+        calls.append(("primary", model))
+        return LLMResult(content="", model=model, provider="openrouter",
+                         usage={"completion_tokens": 120, "reasoning_tokens": 140})
+
+    def fake_ollama(messages, model, base_url, temperature=0):
+        calls.append(("fallback", model, base_url))
+        return {"choices": [{"message": {"content": '{"relevant": true}'}}],
+                "model": model, "usage": {"total_tokens": 5}}
+
+    o1, o2 = _patch_llm_backends(fake_openai, fake_ollama)
+    try:
+        res = g.chat_with_fallback(
+            [{"role": "user", "content": "hi"}],
+            primary_model="openrouter/free", fallback_model="qwen2.5:7b",
+            fallback_base_url="http://127.0.0.1:11434/v1",
+        )
+        assert res.provider == "ollama", res
+        assert res.content == '{"relevant": true}'
+        assert calls == [("primary", "openrouter/free"),
+                         ("fallback", "qwen2.5:7b", "http://127.0.0.1:11434/v1")]
+    finally:
+        g._openai_chat, g._ollama_chat_raw = o1, o2
+
+
 def test_chat_fallback_all_fail_reader():
     """主用与 Ollama 都失败 → 落到 reader。"""
     import app.llm_gateway as g

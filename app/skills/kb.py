@@ -1,17 +1,21 @@
 """只读工具：企业知识库检索（SQLite FTS5 RAG + LIKE 兜底）。低风险。"""
 from .registry import register_tool
+from ..config import settings
 
 try:
     from ..kb import search, search_simple
 except Exception:
-    def search(q, top_k=3): return []
-    def search_simple(q, top_k=3): return []
+    def search(q, top_k=None): return []
+    def search_simple(q, top_k=None): return []
 
 _FALLBACK = {"content": "未命中知识库，建议咨询对应负责人或补充工单描述。"}
 
 
 @register_tool(name="search_kb", risk="low", description="检索企业知识库，返回匹配的 IT/运维文档片段（只读）。")
-def search_kb(query: str, top_k: int = 3) -> dict:
+def search_kb(query: str, top_k: int | None = None) -> dict:
+    # top_k 缺省引用配置 VECTOR_TOP_K（整改②）
+    if top_k is None:
+        top_k = settings.vector_top_k
     # 先尝试 FTS；无匹配再退 LIKE
     try:
         hits = search(query, top_k)

@@ -33,6 +33,12 @@ def get_tool(name: str) -> Tool | None:
     return _REGISTRY.get(name)
 
 
+def roles_for_tool(name: str) -> tuple:
+    """工具 → 允许角色（整改①：注册表为『工具→角色』唯一事实源，业务代码统一读取）。"""
+    t = get_tool(name)
+    return t.roles if t else ()
+
+
 def list_tools() -> list[Tool]:
     return list(_REGISTRY.values())
 

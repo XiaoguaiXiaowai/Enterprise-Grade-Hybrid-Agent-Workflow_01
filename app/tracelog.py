@@ -5,7 +5,8 @@
 - info：记录请求路由 + 核心函数进入/退出
 - debug：与 info 相同（保留扩展位，方便后续加参数/返回值）
 
-统一写入项目目录 logs/ 下，按日期命名文件（同一天累加到同一文件）：
+统一写入项目目录 logs/ 下（可用环境变量 LOG_DIR 改目录，整改⑦），按日期命名文件
+（同一天累加到同一文件）：
   logs/2026-08-13.log
 
 时间统一使用北京时间（UTC+8，固定偏移，不依赖系统/容器时区）。
@@ -18,6 +19,7 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from pathlib import Path
 
 from .config import settings, BASE_DIR
 
@@ -49,7 +51,9 @@ def _open_handle() -> None:
         except Exception:
             pass
         _handle = None
-    log_dir = BASE_DIR / "logs"
+    log_dir = Path(settings.log_dir)
+    if not log_dir.is_absolute():
+        log_dir = BASE_DIR / log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"{today}.log"
     _handle = open(path, "a", encoding="utf-8")

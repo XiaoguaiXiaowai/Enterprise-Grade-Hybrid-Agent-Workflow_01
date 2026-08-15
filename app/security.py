@@ -10,7 +10,8 @@ from .config import settings
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(),
+                                 settings.pbkdf2_iterations)
     return f"{salt}${digest.hex()}"
 
 
@@ -19,7 +20,8 @@ def verify_password(password: str, stored: str) -> bool:
         salt, hexdigest = stored.split("$", 1)
     except ValueError:
         return False
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(),
+                                 settings.pbkdf2_iterations)
     return hmac.compare_digest(digest.hex(), hexdigest)
 
 
@@ -27,9 +29,11 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_session(user_id: int, ttl_hours: int = 12) -> str:
-    token = secrets.token_urlsafe(32)
-    expires = datetime.now() + timedelta(hours=ttl_hours)
+def create_session(user_id: int, ttl_hours: int | None = None) -> str:
+    """创建会话；TTL 与 token 长度走配置（整改②：SESSION_TTL_HOURS / SESSION_TOKEN_BYTES）。"""
+    ttl = ttl_hours if ttl_hours is not None else settings.session_ttl_hours
+    token = secrets.token_urlsafe(settings.session_token_bytes)
+    expires = datetime.now() + timedelta(hours=ttl)
     with session() as conn:
         conn.execute(
             "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?,?,?)",

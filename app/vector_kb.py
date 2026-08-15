@@ -193,8 +193,13 @@ def index_docs(docs: list[dict]) -> int:
     return tbl.count_rows()
 
 
-def search(query: str, top_k: int = 3) -> list[dict]:
-    """语义检索：对 query embedding 后做近似最近邻（余弦）。不可用/异常返回空列表。"""
+def search(query: str, top_k: int | None = None) -> list[dict]:
+    """语义检索：对 query embedding 后做近似最近邻（余弦）。不可用/异常返回空列表。
+
+    top_k 缺省引用配置 VECTOR_TOP_K（整改②：函数默认值不再写死 3）。
+    """
+    if top_k is None:
+        top_k = settings.vector_top_k
     if not _VECTOR_OK or not _is_indexed():
         return []
     try:

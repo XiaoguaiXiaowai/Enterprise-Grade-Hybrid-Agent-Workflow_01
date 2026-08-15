@@ -1,6 +1,7 @@
 """M2 冒烟测试：低风险工单 + 高风险工单(HITL) + Trace + 指标 全链路。"""
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault("APP_ENV", "development")  # 演示脚本强制非生产，播种才生效（整改⑥）
 os.environ.setdefault("APP_DB_PATH", "/tmp/m2_smoke.db")
 
 from app.db import init_db

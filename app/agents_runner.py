@@ -24,6 +24,10 @@ from .config import settings
 from .context_assembler import render
 from . import trace as trace_mod
 
+# Trace 版本号单一常量（整改⑤）：全项目 prompt_version 统一引用此处，
+# 升级提示词只需改这一处（agents_tools / agents_trace / orchestrator 均已引用）。
+PROMPT_VERSION = "M4-agents"
+
 def sdk_ok() -> bool:
     return ap.sdk_available() and at._SDK_OK
 
@@ -62,7 +66,7 @@ def _make_run_config(ticket_id, ctx, req_id, routing, actor):
         tracing_disabled=not atrace._SDK_OK,
         trace_metadata={"ticket_id": ticket_id, "req_id": req_id,
                         "provider": routing["provider"], "model": routing["model"],
-                        "actor": actor, "prompt_version": "M4-agents",
+                        "actor": actor, "prompt_version": PROMPT_VERSION,
                         "state_before": ctx.get("state", ""), "state_after": "agent_running"},
     )
 
@@ -104,7 +108,7 @@ def _handle_done(ticket_id, result, routing, req_id, run_ctx, budget):
     trace_mod.write(
         req_id=req_id, ticket_id=ticket_id,
         model=routing["model"], provider=routing["provider"],
-        prompt_version="M4-agents",
+        prompt_version=PROMPT_VERSION,
         io={"final_output": final_output},
         state_before=(run_ctx or {}).get("state_before", ""), state_after="done",
         token_usage=getattr(result, "usage", None) or {},

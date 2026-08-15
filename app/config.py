@@ -44,6 +44,29 @@ class Settings:
     # 函数级调用日志：off | info | debug（见 tracelog.py）
     log_level: str = os.getenv("APP_LOG_LEVEL", "off")
 
+    # ===== 整改②：LLM 调用参数（魔法数字外部化）=====
+    llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0"))
+    # 注意：max_tokens 是「含推理 token 的总输出预算」。若主用推理类模型（如 liquid/*）
+    # 需调大，否则思考阶段即耗尽预算、返回空 content；512 对非推理模型足够且快速。
+    llm_max_tokens_classify: int = int(os.getenv("LLM_MAX_TOKENS_CLASSIFY", "512"))
+    llm_max_tokens_rewrite: int = int(os.getenv("LLM_MAX_TOKENS_REWRITE", "512"))
+    # 成本估算单价（美元/百万 token）；默认 0=未定价，配置后 /metrics 的 cost 为真实估算
+    llm_cost_per_1m_tokens: float = float(os.getenv("LLM_COST_PER_1M_TOKENS", "0"))
+
+    # ===== 整改②：上下文装配 / 守卫阈值 =====
+    ctx_max_history: int = int(os.getenv("CTX_MAX_HISTORY", "8"))
+    ctx_max_obs_len: int = int(os.getenv("CTX_MAX_OBS_LEN", "1200"))
+    ctx_min_truncate: int = int(os.getenv("CTX_MIN_TRUNCATE", "30"))
+    dedup_window_minutes: int = int(os.getenv("DEDUP_WINDOW_MINUTES", "5"))
+
+    # ===== 整改②：安全参数 =====
+    pbkdf2_iterations: int = int(os.getenv("PBKDF2_ITERATIONS", "100000"))
+    session_ttl_hours: int = int(os.getenv("SESSION_TTL_HOURS", "12"))
+    session_token_bytes: int = int(os.getenv("SESSION_TOKEN_BYTES", "32"))
+
+    # ===== 整改⑦：函数级日志目录（相对项目根或绝对路径）=====
+    log_dir: str = os.getenv("LOG_DIR", "logs")
+
     # 向量知识库（本地 RAG）：主用 OpenRouter embedding，兜底 Ollama bge-m3，LanceDB 存向量
     vector_db_path: str = os.getenv("VECTOR_DB_PATH", "data/vector-kb")
     # 主用 embedding（OpenRouter）：默认 nvidia/nemotron-3-embed-1b:free，端点独立可配

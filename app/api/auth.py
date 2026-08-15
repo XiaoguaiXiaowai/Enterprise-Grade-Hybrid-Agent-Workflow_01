@@ -1,13 +1,29 @@
-"""认证路由：登录（本地账户）、当前用户、种子演示账户（M1 简化，SSO 迁移点见文档）。"""
+"""认证路由：登录（本地账户）、当前用户、种子演示账户（M1 简化，SSO 迁移点见文档）。
+
+整改⑥：自动播种仅非生产生效（APP_ENV=production 直接跳过）；种子密码不再写死
+pass123 —— 优先取 SEED_USER_PASSWORD 环境变量，缺省随机生成。
+"""
+import os
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..config import settings
 from ..db import session
 from ..security import hash_password, verify_password, create_session
 from ..deps import current_user
 from ..tracelog import trace_call
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# 演示播种的角色（生产不自动创建）
+SEED_ROLES = ("employee", "operator", "admin")
+
+
+def _seed_password() -> str:
+    """种子密码：SEED_USER_PASSWORD 环境变量优先，缺省随机生成（不再硬编码）。"""
+    return os.getenv("SEED_USER_PASSWORD", "") or secrets.token_urlsafe(12)
 
 
 class LoginIn(BaseModel):
@@ -41,15 +57,17 @@ def me(ctx: dict = Depends(current_user)):
 @router.post("/seed")
 @trace_call("api.auth.seed_users")
 def seed_users():
-    """M1 演示用：确保存在默认租户与三种角色账户。生产移除。"""
+    """M1 演示用：确保默认租户与三种角色账户。
+
+    生产环境（APP_ENV=production）不生效 —— 演示账户播种是弱口令安全风险，
+    生产请用真实用户体系或手动初始化（见 doc/硬编码清单.md 整改⑥）。
+    """
+    if settings.env == "production":
+        return {"seeded": False, "reason": "APP_ENV=production 禁用演示账户自动播种"}
+    pw = _seed_password()
     with session() as conn:
         conn.execute("INSERT OR IGNORE INTO tenants (id, name) VALUES (1, '默认租户')")
-        defaults = [
-            ("employee", "pass123"),
-            ("operator", "pass123"),
-            ("admin", "pass123"),
-        ]
-        for role, pw in defaults:
+        for role in SEED_ROLES:
             cur = conn.execute("SELECT id FROM users WHERE username = ?", (role,))
             if cur.fetchone() is None:
                 conn.execute(

@@ -16,6 +16,7 @@ import time
 from . import daos
 from . import trace as trace_mod
 from .budget import BudgetExceeded
+from .config import settings
 from .guards import fingerprint, is_duplicate
 from .skills import registry
 from .db import session as db_session
@@ -40,6 +41,12 @@ def _ticket_status(ticket_id) -> str:
     return row["status"] if row else "?"
 
 
+def _prompt_version() -> str:
+    """Trace 版本号单一来源（整改⑤：统一引用 agents_runner.PROMPT_VERSION）。"""
+    from .agents_runner import PROMPT_VERSION  # 运行期导入，避免模块加载期环
+    return PROMPT_VERSION
+
+
 def _record_tool_error(ctx, tool, error, extra=None):
     """把工具侧异常记录到 RunContext，由 runner 在 SDK 外重新抛出（保持 M2 语义）。"""
     rec = {"tool": tool, "error": str(error), "type": type(error).__name__}
@@ -61,7 +68,7 @@ def _run(tool: str, ctx, params: dict):
     budget = c["budget"]
     req_id = c.get("req_id", "")
     provider = c.get("provider", "openrouter")
-    model = c.get("model", "openrouter")
+    model = c.get("model", settings.agent_model)  # 整改③：兜底模型名改为引用配置
 
     tw = registry.get_tool(tool)
     if tw is None:
@@ -93,7 +100,7 @@ def _run(tool: str, ctx, params: dict):
     key = fingerprint(f"ticket:{ticket_id}", tool, params)
     daos.record_tool_call(ticket_id, tool, params, resp.get("result", resp), status, key, latency)
     trace_mod.write(req_id, ticket_id, model=model, provider=provider,
-                    prompt_version="M4-agents", tool_name=tool,
+                    prompt_version=_prompt_version(), tool_name=tool,
                     io={"params": params, "result": resp.get("result", resp)},
                     state_before=before, state_after=_ticket_status(ticket_id),
                     latency_ms=latency, context_source="tool")
@@ -108,7 +115,8 @@ def _run(tool: str, ctx, params: dict):
 
 # ---- SDK tool 定义（显式签名，与 registry 内签名一致） ----
 
-def _search_kb(ctx: RunContextWrapper, query: str, top_k: int = 3) -> dict:
+def _search_kb(ctx: RunContextWrapper, query: str,
+               top_k: int = settings.vector_top_k) -> dict:
     """检索企业知识库，返回匹配的 IT/运维文档片段（只读）。"""
     return _run("search_kb", ctx, {"query": query, "top_k": top_k})
 
@@ -138,14 +146,8 @@ def _revoke_db_readonly(ctx: RunContextWrapper, principal: str) -> dict:
 _SDK_TOOLS = [_search_kb, _search_kb_direct, _query_user_dir,
               _grant_db_readonly, _revoke_db_readonly]
 
-# 工具 -> 允许角色（与 skills/*.py 的 register_tool roles 保持一致）
-_TOOL_ROLES = {
-    "search_kb": ("employee", "operator", "admin"),
-    "search_kb_direct": ("employee", "operator", "admin"),
-    "query_user_dir": ("employee", "operator", "admin"),
-    "grant_db_readonly": ("operator", "admin"),
-    "revoke_db_readonly": ("operator", "admin"),
-}
+# 工具 -> 允许角色：唯一事实源在 skills/registry.py（register_tool roles=），
+# 此处不再维护 _TOOL_ROLES，统一经 registry.roles_for_tool 读取（整改①）。
 
 
 def _tool_meta(fn):
@@ -176,7 +178,7 @@ def build_agent_tools(role: str, names) -> list:
         name, _, _ = _tool_meta(fn)
         if name not in want:
             continue
-        if role not in _TOOL_ROLES.get(name, ()):
+        if role not in registry.roles_for_tool(name):
             continue
         out.append(_wrap_tool(fn))
     return out
@@ -187,4 +189,4 @@ def build_sdk_tools(role: str) -> list:
     if not _SDK_OK:
         return []
     return [_wrap_tool(fn) for fn in _SDK_TOOLS
-            if role in _TOOL_ROLES.get(_tool_meta(fn)[0], ())]
+            if role in registry.roles_for_tool(_tool_meta(fn)[0])]

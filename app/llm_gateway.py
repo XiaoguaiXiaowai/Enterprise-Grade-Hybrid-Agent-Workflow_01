@@ -30,7 +30,8 @@ def build_openai_client(base_url: str | None = None, api_key: str | None = None)
     )
 
 
-def _ollama_chat_raw(messages: list, model: str, base_url: str, temperature: int = 0) -> dict:
+def _ollama_chat_raw(messages: list, model: str, base_url: str,
+                     temperature: float = settings.llm_temperature) -> dict:
     """httpx 直连 Ollama /v1/chat/completions（Ollama 2.3+ 兼容 OpenAI 协议）。"""
     import httpx
     url = (base_url or settings.ollama_base_url).rstrip("/") + "/chat/completions"
@@ -43,7 +44,8 @@ def _ollama_chat_raw(messages: list, model: str, base_url: str, temperature: int
 
 def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
                        base_url: str | None = None, fallback_base_url: str | None = None,
-                       temperature: int = 0, max_tokens: int | None = None,
+                       temperature: float = settings.llm_temperature,
+                       max_tokens: int | None = None,
                        api_key: str | None = None,
                        reader_builder=None, raise_if_reader=False) -> LLMResult:
     """三级降级：主用 OpenAI 兼容 → Ollama 兜底 → 离线 reader。
@@ -55,9 +57,15 @@ def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
     # 1) 主用（OpenRouter / OpenAI 兼容）
     if primary_model:
         try:
-            return _openai_chat(messages, primary_model, base_url=base_url,
-                                api_key=api_key, temperature=temperature,
-                                max_tokens=max_tokens)
+            res = _openai_chat(messages, primary_model, base_url=base_url,
+                               api_key=api_key, temperature=temperature,
+                               max_tokens=max_tokens)
+            if res.content and res.content.strip():
+                return res
+            # 空输出（如推理模型被 max_tokens 截断、finish_reason=length）视为失败，
+            # 继续走 Ollama 兜底，避免下游误判为成功而静默落规则。
+            raise RuntimeError(
+                f"主用 {primary_model} 返回空内容（可能被 max_tokens 截断或推理未完成）")
         except Exception as e:  # noqa: BLE001
             error = e
     # 2) Ollama 兜底
@@ -78,7 +86,7 @@ def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
 
 
 def _openai_chat(messages: list, model: str, base_url: str | None = None,
-                 api_key: str | None = None, temperature: int = 0,
+                 api_key: str | None = None, temperature: float = settings.llm_temperature,
                  max_tokens: int | None = None) -> LLMResult:
     client = build_openai_client(base_url=base_url, api_key=api_key)
     t0 = datetime.now()

@@ -1,6 +1,7 @@
 """全分支测试：SDK 路径 / 传统降级 / HITL / 守卫 / RBAC / 审计。"""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault("APP_ENV", "development")  # 测试脚本强制非生产，播种才生效（整改⑥）
 
 def _new_db(name):
     os.environ["APP_DB_PATH"] = f"/tmp/wf_{name}.db"
