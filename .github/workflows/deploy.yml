@@ -1,0 +1,40 @@
+# 自动部署：push main 后经 SSH 在阿里云服务器上重新构建并发布
+# 前置配置（一次性）：
+#   1. GitHub Secret: DEPLOY_SSH_KEY —— 服务器登录私钥（ed25519，公钥已加入服务器 /root/.ssh/authorized_keys）
+#   2. 服务器 /root/.ssh/id_ed25519 —— 仓库克隆私钥（公钥已加入本仓库 Deploy Keys，只读）
+#   3. 服务器 /opt/git/enterprise-agent-workflow/.env —— 应用密钥（不提交 git）
+#   4. 服务器 nginx 已安装 deploy/nginx/playground.conf（HTTPS 入口，证书 certbot 管理）
+name: Deploy to Aliyun (playground)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: SSH 部署到阿里云服务器
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 8.140.233.55
+          username: root
+          port: 22
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            DEPLOY_DIR=/opt/git/enterprise-agent-workflow
+            if [ ! -d "$DEPLOY_DIR/.git" ]; then
+              git clone git@github.com:XiaoguaiXiaowai/Enterprise-Grade-Hybrid-Agent-Workflow_01.git "$DEPLOY_DIR"
+            fi
+            cd "$DEPLOY_DIR"
+            git fetch origin
+            git reset --hard origin/main
+            git clean -fd
+            bash scripts/deploy.sh
+            echo "==> Actions 部署完成 ✅"
