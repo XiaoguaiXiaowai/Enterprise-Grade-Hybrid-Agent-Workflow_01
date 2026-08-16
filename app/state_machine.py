@@ -14,8 +14,9 @@ TRANSITIONS = {
     "agent_running":    {"gathering", "awaiting_approval", "done", "failed", "cancelled"},
     "awaiting_approval": {"running", "gathering", "cancelled", "failed"},
     "running":          {"done", "failed", "cancelled"},
-    "done":             {"archived"},
-    "failed":           {"archived"},
+    # 多轮对话：完成/失败后用户可追加提问 → 回到 gathering 开新一轮
+    "done":             {"archived", "gathering"},
+    "failed":           {"archived", "gathering"},
     "cancelled":        {"archived"},
     "archived":         set(),
 }

@@ -42,15 +42,12 @@ def _rule_classify(text: str) -> tuple[str, str]:
 
 
 def _parse_json(text: str) -> dict | None:
-    log("info", "classify", f"text={text}")
     if not text:
         return None
     m = re.search(r"\{.*\}", text, re.S)
-    log("info", "classify", f"match={m}")
     if not m:
         return None
     try:
-        log("info", "classify", f"json={m.group(0)}")
         return json.loads(m.group(0))
     except Exception:
         return None
@@ -77,9 +74,7 @@ def classify(title: str = "", description: str = "", rewritten: str | None = Non
             )
             data = _parse_json(result.content or "")
             if enabled():
-                log("info", "classify", f"prompt={prompt}")
                 log("info", "classify", f"resp={result.content}")
-                log("info", "classify", f"data={data}")
             if data:
                 intent = data.get("intent_type")
                 risk = data.get("risk_level")
@@ -110,9 +105,6 @@ def relevance_check(title: str, description: str) -> dict:
 
     if settings.openrouter_api_key:
         try:
-            log("info", "relevance_check", f"prompt={prompt}")
-            log("info", "relevance_check", f"primary_model={settings.relevance_model}")
-            log("info", "relevance_check", f"fallback_model={settings.relevance_fallback_model}")
             result = chat_with_fallback(
                 [{"role": "user", "content": prompt}],
                 primary_model=settings.relevance_model,
@@ -125,7 +117,6 @@ def relevance_check(title: str, description: str) -> dict:
             data = _parse_json(result.content or "")
             if enabled():
                 log("info", "relevance_check", f"result={result}")
-                log("info", "relevance_check", f"data={data}")
             if data and isinstance(data.get("relevant"), bool):
                 log("info", "relevance_check", "LLM 判定")
                 return {"relevant": data["relevant"], "reason": data.get("reason", ""),
@@ -156,9 +147,6 @@ def rewrite_content(title: str, description: str) -> dict:
 
     if settings.openrouter_api_key:
         try:
-            log("info", "rewrite_content", f"prompt={prompt}")
-            log("info", "rewrite_content", f"primary_model={settings.rewrite_model}")
-            log("info", "rewrite_content", f"fallback_model={settings.rewrite_fallback_model}")
             result = chat_with_fallback(
                 [{"role": "user", "content": prompt}],
                 primary_model=settings.rewrite_model,
@@ -171,7 +159,6 @@ def rewrite_content(title: str, description: str) -> dict:
             data = _parse_json(result.content or "")
             if enabled():
                 log("info", "rewrite_content", f"result={result}")
-                log("info", "rewrite_content", f"data={data}")
             if data and data.get("summary"):
                 log("info", "rewrite_content", "LLM 判定")
                 return {"summary": data["summary"],

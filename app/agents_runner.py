@@ -23,6 +23,7 @@ from . import agents_trace as atrace
 from .config import settings
 from .context_assembler import render
 from . import trace as trace_mod
+from .tracelog import log
 
 # Trace 版本号单一常量（整改⑤）：全项目 prompt_version 统一引用此处，
 # 升级提示词只需改这一处（agents_tools / agents_trace / orchestrator 均已引用）。
@@ -161,10 +162,13 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
                "state_before": ctx["state"]}
     run_config = _make_run_config(ticket_id, ctx, req_id, routing, actor)
     agent = _build_agent_group(routing, actor_role(actor))
+    log("info", "agents_runner.run_sdk", f"agent={agent}")
 
     try:
         result = _run(agent, user_input, run_config, run_ctx, max_turns=budget.max_steps)
+        log("info", "agents_runner.run_sdk", f"result={result}")
     except Exception as e:
+        log("info", "agents_runner.run_sdk", f"e={e}")
         if routing["provider"] == "openrouter":
             try:
                 fb_agent = _build_agent_group(routing, actor_role(actor),

@@ -149,7 +149,6 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
         ap = daos.get_approval(resume_approval_id)
         if ap and ap["status"] == "approved":
             resume_call = {"tool": ap["tool_name"], "params": json.loads(ap["params_json"])}
-
     try:
         # M5 功能2：提示词重写——建单时已重写并落"rewrite"事件，此处直接复用为目标；
         # 旧票/未重写时再现场重写一次兜底。
@@ -162,8 +161,6 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                                {"summary": rw["summary"], "keywords": rw["keywords"],
                                 "source": rw["source"]}, actor)
             goal = rw["summary"]
-            if enabled():
-                log("info", "run_ticket", f"rewrite={rw}")
 
         ctx = assemble({"id": ticket["id"], "title": ticket["title"],
                         "status": ticket["status"], "risk_level": ticket["risk_level"]},
@@ -172,20 +169,28 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
 
         daos.transition(ticket_id, "agent_running", actor, reason="LOOP 执行")
 
+        log("info", "orchestrator._run_loop", f"resume_call={resume_call}")
+        log("info", "orchestrator._run_loop", f"sdk_ok={agents_runner.sdk_ok()}")
         if resume_call:
+            log("info", "orchestrator._run_loop", "1")
             _execute_tool(ticket_id, resume_call["tool"], resume_call["params"],
                           actor, budget, req_id, llm.provider, llm.name,
                           bypass_hitl=True)
         elif agents_runner.sdk_ok():
+            log("info", "orchestrator._run_loop", "2")
             try:
+                log("info", "orchestrator._run_loop", "3")
                 sdk_result = agents_runner.run_sdk(
                     ticket_id, ctx, actor, budget, routing, req_id=req_id)
-                if enabled():
-                    log("info", "run_ticket", f"agents_runner.sdk_ok -- sdk_result={sdk_result}")
+                log("info", "orchestrator._run_loop", f"agents_runner.run_sdk -- sdk_result={sdk_result}")
             except agents_runner.SdkUnavailable:
+                log("info", "orchestrator._run_loop", f"4: {agents_runner.SdkUnavailable}")
                 # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
                 _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
+                log("info", "orchestrator._run_loop", f"except  plan_and_execute")
             else:
+                log("info", "orchestrator._run_loop", "5")
+                log("info", "orchestrator._run_loop", f"except else status={sdk_result['status']}")
                 if sdk_result["status"] == "awaiting_approval":
                     daos.transition(ticket_id, "awaiting_approval", actor, reason="HITL 中断(SDK)")
                     _record_metrics(ticket_id, ticket["intent_type"], human_takeover=True)
@@ -196,28 +201,32 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                                 "provider": sdk_result["provider"],
                                 "model": sdk_result["model"]}, actor)
         else:
+            log("info", "orchestrator._run_loop", "6")
             _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
-            if enabled():
-                log("info", "run_ticket", f"agents_runner.sdk_not_ok -- plan_and_execute")
-
-        # 收敛：设置 done
+            log("info", "orchestrator._run_loop", f"else  plan_and_execute")
+        
+        # 收敛：设置 done 状态
+        log("info", "orchestrator._run_loop", "7")
         daos.transition(ticket_id, "done", actor, reason="收敛: done:true + 校验通过")
         daos.add_event(ticket_id, "deliver", {"summary": "工单已完成"}, actor)
         _record_metrics(ticket_id, ticket["intent_type"], success=True)
         return {"status": "done", "ticket_id": ticket_id}
 
     except _NeedsApproval as na:
+        log("info", "orchestrator._run_loop", f"8: {na.approval_id}")
         daos.transition(ticket_id, "awaiting_approval", actor, reason="HITL 中断")
         _record_metrics(ticket_id, ticket["intent_type"], human_takeover=True)
         return {"status": "awaiting_approval", "approval_id": na.approval_id,
                 "tool": na.tool, "params": na.params}
 
     except BudgetExceeded as be:
+        log("info", "orchestrator._run_loop", f"9: {be.kind}")
         daos.transition(ticket_id, "failed", actor, reason=f"预算触顶: {be.kind}")
         _record_metrics(ticket_id, ticket["intent_type"], success=False, correct_failure=True)
         return {"status": "failed", "reason": f"预算触顶: {be.kind}"}
 
     except Exception as e:  # noqa: BLE001
+        log("info", "orchestrator._run_loop", f"10: {e}")
         daos.transition(ticket_id, "failed", actor, reason=f"异常: {e}")
         _record_metrics(ticket_id, ticket["intent_type"], success=False)
         return {"status": "failed", "reason": str(e)}
