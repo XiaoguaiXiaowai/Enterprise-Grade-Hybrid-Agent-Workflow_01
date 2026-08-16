@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from .db import init_db
 from .kb import init_kb, seed_kb
 from . import tracelog
+from .config import settings
 from .api import auth as auth_api
 from .api import tickets as tickets_api
 from .api import governance as governance_api
@@ -23,8 +24,29 @@ DEFAULT_KB = [
 ]
 
 
+# 生产环境密钥校验（P1-10 整改）：
+# - 代码默认值（未配置 SECRET_KEY）→ 拒绝启动，防止无密钥裸跑
+# - 占位符（change-me-to-a-long-random-string）→ 允许启动但强告警
+_DEFAULT_SECRET = "dev-insecure-key"
+_PLACEHOLDER_SECRET = "change-me-to-a-long-random-string"
+
+
+def _check_secret_key() -> None:
+    if settings.env != "production":
+        return
+    if settings.secret_key == _DEFAULT_SECRET:
+        raise RuntimeError(
+            "生产环境禁止使用默认 SECRET_KEY：请在 .env 配置强随机密钥"
+            "（python -c \"import secrets; print(secrets.token_urlsafe(48))\")")
+    if settings.secret_key == _PLACEHOLDER_SECRET:
+        tracelog.log("WARN", "main.secret_key",
+                     "SECRET_KEY 仍是占位符 change-me-to-a-long-random-string，"
+                     "请尽快替换为随机值（生产环境强建议）")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _check_secret_key()
     init_db()
     init_kb()
     # 幂等种入知识库（仅当为空时）：先 FTS，再尽力做向量索引
