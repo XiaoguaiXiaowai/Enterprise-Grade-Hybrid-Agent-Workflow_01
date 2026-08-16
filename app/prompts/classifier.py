@@ -15,7 +15,10 @@ RISK_RULES = [
 
 # 相关性校验兜底：明显的非 IT 闲聊/无关信号（命中即判不相关）
 NON_IT_KEYWORDS = ("情书", "午饭", "吃什么", "招聘", "买菜", "唱歌", "做饭",
-                   "恋爱", "电影", "旅游", "股票", "聊聊天", "随便聊聊")
+                   "恋爱", "电影", "旅游", "股票", "聊聊天", "随便聊聊",
+                   "团建", "聚餐", "晚饭", "早餐", "八卦", "追剧", "演唱会",
+                   "明星", "外卖", "奶茶", "宵夜", "夜宵", "摸鱼", "跳槽",
+                   "双十一", "拼单", "砍价", "相亲", "宠物", "健身", "减肥")
 
 
 def classify_prompt(focus: str) -> str:
@@ -58,4 +61,27 @@ def rewrite_prompt(title: str, description: str) -> str:
         "只输出一个 JSON 对象，不要输出其他内容，格式：\n"
         '{"summary": "简洁任务目标", "keywords": ["kw1", "kw2"]}\n\n'
         f"标题：{title}\n内容：{description}"
+    )
+
+
+def followup_relevance_prompt(ticket_title: str, ticket_desc: str,
+                              recent_dialogue: str, content: str) -> str:
+    """追加提问相关性校验提示词：追加内容与当前工单是否相关。
+
+    相关：追问、补充信息、提供新线索、对处理结果提问等；
+    不相关：与工单无关的闲聊、另一个全新任务等。
+    """
+    return (
+        "你是企业 IT 工单系统的对话校验器。用户在已建工单的对话中追加了一条消息，"
+        "请判断这条追加消息是否与当前工单相关。\n"
+        "判定为『相关』的情况：对工单诉求的追问、补充细节/线索/账号信息、"
+        "对 Agent 处理结果的提问、同意或拒绝等。\n"
+        "判定为『不相关』的情况：与工单完全无关的闲聊、以及明显属于另一个全新任务"
+        "（应建议其新建工单）的内容。\n"
+        "只输出一个 JSON 对象，不要输出其他内容，格式：\n"
+        '{"relevant": true, "reason": "一句话理由"}\n'
+        "其中 relevant 取值 true（相关）或 false（不相关）。\n\n"
+        f"工单标题：{ticket_title}\n工单内容：{ticket_desc}\n"
+        f"最近对话：{recent_dialogue or '（暂无）'}\n"
+        f"追加消息：{content}"
     )

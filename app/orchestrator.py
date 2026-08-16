@@ -83,16 +83,22 @@ def resume_ticket(ticket_id: int, approval_id: int, actor: str = "system", decis
 def _finalize_after_sdk_resume(ticket_id, r, actor):
     """SDK resume 完成后补状态机收敛（resume_run 本身不碰状态机）。
 
-    注意状态机不允许 awaiting_approval → done 直跳，需经 gathering → agent_running → done。
+    注意状态机不允许 awaiting_approval → pending_confirm 直跳，
+    需经 gathering → agent_running → pending_confirm。
     """
     ticket = daos.get_ticket(ticket_id)
     if not ticket:
         return
     from .state_machine import can_transition
     if r["status"] == "done":
-        _walk_transitions(ticket_id, ["gathering", "agent_running", "done"],
+        _walk_transitions(ticket_id, ["gathering", "agent_running", "pending_confirm"],
                           actor, "收敛: 审批恢复完成")
-        daos.add_event(ticket_id, "deliver", {"summary": r.get("final_output", "")}, actor)
+        # 与正常 run 路径一致：最终结论进 model_call(final)，deliver 只写中文收尾
+        daos.add_event(ticket_id, "model_call",
+                       {"content": r.get("final_output", ""), "kind": "final",
+                        "provider": r.get("provider", ""), "model": r.get("model", "")},
+                       actor)
+        daos.add_event(ticket_id, "deliver", {"summary": "本轮处理完成，请确认是否完成"}, actor)
         _record_metrics(ticket_id, ticket["intent_type"], success=True)
     elif r["status"] == "awaiting_approval":
         # 恢复后又触发新的中断 → 回到 gathering 并留在 agent_running? 保持 awaiting_approval
@@ -122,10 +128,13 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
         raise KeyError(ticket_id)
 
     # 状态机入口：created → triaged → gathering
+    # 多轮对话：待确认完成（pending_confirm）/ 失败（failed）状态下用户追加提问 → 开新一轮
     if ticket["status"] == "created":
         daos.transition(ticket_id, "triaged", actor, reason="意图分类+风险分级")
-    if ticket["status"] in ("triaged", "awaiting_approval", "created"):
-        daos.transition(ticket_id, "gathering", actor, reason="LOOP 开始")
+    if ticket["status"] in ("triaged", "awaiting_approval", "created", "pending_confirm", "failed"):
+        daos.transition(ticket_id, "gathering", actor,
+                        reason="LOOP 开始（多轮追问）" if ticket["status"] in ("pending_confirm", "failed")
+                        else "LOOP 开始")
 
     routing = route(ticket["intent_type"], ticket["risk_level"])
     llm = get_llm(routing["provider"] if routing["provider"] != "reader" else "reader")
@@ -199,16 +208,16 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                 daos.add_event(ticket_id, "model_call",
                                {"content": sdk_result["final_output"],
                                 "provider": sdk_result["provider"],
-                                "model": sdk_result["model"]}, actor)
+                                "model": sdk_result["model"], "kind": "final"}, actor)
         else:
             log("info", "orchestrator._run_loop", "6")
             _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
             log("info", "orchestrator._run_loop", f"else  plan_and_execute")
         
-        # 收敛：设置 done 状态
+        # 收敛：回合完成 → 待客户确认完成（pending_confirm），确认后才变 done
         log("info", "orchestrator._run_loop", "7")
-        daos.transition(ticket_id, "done", actor, reason="收敛: done:true + 校验通过")
-        daos.add_event(ticket_id, "deliver", {"summary": "工单已完成"}, actor)
+        daos.transition(ticket_id, "pending_confirm", actor, reason="回合完成，等待客户确认")
+        daos.add_event(ticket_id, "deliver", {"summary": "本轮处理完成，请确认是否完成"}, actor)
         _record_metrics(ticket_id, ticket["intent_type"], success=True)
         return {"status": "done", "ticket_id": ticket_id}
 
@@ -246,6 +255,7 @@ def actor_role(actor: str) -> str:
 
 
 def _load_history(ticket_id) -> list[dict]:
+    """加载工单事件历史供 Agent 参考（多轮对话：含 user_message 追问）。"""
     rows = daos.list_events(ticket_id)
     hist = []
     for e in rows:
@@ -253,7 +263,16 @@ def _load_history(ticket_id) -> list[dict]:
             payload = json.loads(e["payload_json"] or "{}")
         except Exception:
             payload = {}
-        hist.append({"type": e["event_type"], "summary": payload.get("summary") or str(payload)[:80],
+        # 计划类 model_call（tool() 指令文本）不进上下文，避免污染
+        if e["event_type"] == "model_call" and payload.get("kind") == "plan":
+            continue
+        if e["event_type"] in ("user_message", "system_message"):
+            summary = payload.get("content") or ""
+        elif e["event_type"] in ("deliver", "model_call"):
+            summary = (payload.get("summary") or payload.get("content") or "")[:200]
+        else:
+            summary = payload.get("summary") or str(payload)[:80]
+        hist.append({"type": e["event_type"], "summary": summary,
                      "content": str(payload)})
     return hist
 
@@ -300,7 +319,8 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
                     state_before=before, state_after=ticket_status(ticket_id),
                     latency_ms=result.latency_ms, token_usage=result.usage,
                     context_source="assemble")
-    daos.add_event(ticket_id, "model_call", {"content": plan_text, "provider": result.provider}, actor)
+    daos.add_event(ticket_id, "model_call",
+                   {"content": plan_text, "provider": result.provider, "kind": "plan"}, actor)
 
     calls = _parse_tool_calls(plan_text)
     ticket = daos.get_ticket(ticket_id)  # 需标题/描述补全参数

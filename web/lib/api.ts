@@ -65,6 +65,18 @@ export function getConversation(id: number) {
 export function runTicket(id: number) {
   return req<any>(`/api/tickets/${id}/run`, { method: "POST" });
 }
+export function sendMessage(id: number, content: string) {
+  return req<any>(`/api/tickets/${id}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+export function closeTicket(id: number) {
+  return req<any>(`/api/tickets/${id}/close`, { method: "POST" });
+}
+export function confirmTicket(id: number) {
+  return req<any>(`/api/tickets/${id}/confirm`, { method: "POST" });
+}
 export function getApprovals(ticketId: number) {
   return req<any[]>(`/api/tickets/${ticketId}/approvals`);
 }

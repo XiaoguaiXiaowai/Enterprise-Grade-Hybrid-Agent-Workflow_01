@@ -4,6 +4,17 @@ import Nav from "@/components/Nav";
 import { listAllTickets, getApprovals, approve, getToken } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
+const APPROVAL_STATUS_LABEL: Record<string, string> = {
+  pending: "待处理", approved: "已通过", rejected: "已驳回",
+};
+const TOOL_LABEL: Record<string, string> = {
+  search_kb: "检索企业知识库",
+  search_kb_direct: "检索企业知识库",
+  query_user_dir: "查询用户信息与权限",
+  grant_db_readonly: "开通数据库只读权限",
+  revoke_db_readonly: "回收数据库只读权限",
+};
+
 export default function Approve() {
   const router = useRouter();
   const [pending, setPending] = useState<any[]>([]);
@@ -33,7 +44,10 @@ export default function Approve() {
     setMsg("");
     try {
       const r = await approve(a.ticket_id, a.id, decision, decision === "approve" ? "同意" : "驳回");
-      setMsg(JSON.stringify(r));
+      const ok = r?.decision === "approved" || r?.status === "rejected";
+      setMsg(ok
+        ? `已${decision === "approve" ? "通过" : "驳回"}工单 #${a.ticket_id} 的审批，Agent 已${decision === "approve" ? "恢复执行" : "收到驳回并调整"}。`
+        : `审批结果：${JSON.stringify(r)}`);
       await refresh();
     } catch (ex: any) { setMsg(ex.message); }
   }
@@ -50,8 +64,8 @@ export default function Approve() {
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div>
                 <strong>#{a.ticket_id} {a.ticket_title}</strong>
-                <div className="muted">工具: <code>{a.tool_name}</code> · 参数: <code>{a.params_json}</code></div>
-                <div className="muted">申请人: {a.requested_by} · 状态: {a.status}</div>
+                <div className="muted">待执行操作: <code>{TOOL_LABEL[a.tool_name] || a.tool_name}</code> · 参数: <code>{a.params_json}</code></div>
+                <div className="muted">申请人: {a.requested_by} · 状态: {APPROVAL_STATUS_LABEL[a.status] || a.status}</div>
               </div>
               <div className="row">
                 <button className="ok" onClick={() => decide(a, "approve")}>通过</button>

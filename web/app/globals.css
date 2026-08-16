@@ -78,8 +78,15 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bor
 .hitl-card .muted { color: rgba(251, 191, 36, 0.7); }
 .deliver-card { border: 1px solid var(--ok); background: rgba(52, 211, 153, 0.08); padding: 10px 12px; color: var(--ok); }
 
-/* 底部状态条 */
-.chat-foot { border-top: 1px solid var(--border); padding-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 44px; }
+/* 底部输入区：关闭确认条 + 输入行 */
+.chat-foot { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.close-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--ok); background: rgba(52, 211, 153, 0.06);
+  border-radius: 10px; padding: 8px 12px; color: var(--ok); }
+.close-bar .cb-actions { margin-left: auto; display: flex; gap: 8px; }
+.chat-input-row { display: flex; gap: 8px; }
+.chat-input-row input { flex: 1; min-width: 0; }
+.chat-input-row button { white-space: nowrap; }
 
 /* --- 新建工单 Modal --- */
 .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.7); display: flex; align-items: center; justify-content: center; z-index: 50; }

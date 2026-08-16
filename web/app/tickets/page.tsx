@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Nav from "@/components/Nav";
-import { createTicket, getConversation, getTicket, listTickets, runTicket, subscribeTicketWS } from "@/lib/api";
+import { createTicket, getConversation, getTicket, listTickets, runTicket, sendMessage, confirmTicket, subscribeTicketWS } from "@/lib/api";
 
 type Msg = {
   role: "user" | "assistant" | "system";
@@ -13,11 +13,20 @@ type Msg = {
 
 const STATUS_LABEL: Record<string, string> = {
   created: "已创建", triaged: "已分诊", gathering: "信息收集中", agent_running: "处理中",
-  running: "处理中", awaiting_approval: "待审批", done: "已完成", failed: "失败",
-  cancelled: "已取消", archived: "已归档",
+  running: "处理中", awaiting_approval: "等待管理者确认", pending_confirm: "待确认完成",
+  done: "已完成", failed: "失败",
+  cancelled: "已取消", archived: "已关闭",
 };
 const INTENT_LABEL: Record<string, string> = {
   knowledge: "知识", data_query: "数据", change: "变更", troubleshoot: "故障",
+};
+const RISK_LABEL: Record<string, string> = { low: "低", medium: "中", high: "高" };
+const TOOL_LABEL: Record<string, string> = {
+  search_kb: "检索企业知识库",
+  search_kb_direct: "检索企业知识库",
+  query_user_dir: "查询用户信息与权限",
+  grant_db_readonly: "开通数据库只读权限",
+  revoke_db_readonly: "回收数据库只读权限",
 };
 const IN_PROGRESS = ["created", "triaged", "gathering", "agent_running", "running"];
 
@@ -48,10 +57,6 @@ function safeParse(s: string): any {
   try { return JSON.parse(s); } catch { return {}; }
 }
 
-function dump(v: any): string {
-  try { return typeof v === "string" ? v : JSON.stringify(v, null, 2); } catch { return String(v); }
-}
-
 function eventToMsg(e: any): Msg[] {
   const type = e.type || e.event_type;
   const at = e.at || e.created_at;
@@ -60,18 +65,40 @@ function eventToMsg(e: any): Msg[] {
   switch (type) {
     case "created":
       return [{ role: "system", type, text: "工单已创建", at }];
+    case "user_message":
+      return [{ role: "user", type, text: payload?.content || "", at }];
+    case "system_message":
+      return [{ role: "system", type, text: payload?.content || "", at }];
     case "model_call":
-      return [{ role: "assistant", type, text: payload?.content || dump(payload), payload, at }];
+      // 只展示最终结论（kind=final 为自然语言答复）；计划/JSON 类内容不输出
+      if (payload?.kind === "final" && payload?.content) {
+        return [{ role: "assistant", type, text: payload.content, payload, at }];
+      }
+      return [];
     case "tool_call":
-      return [{ role: "assistant", type, text: "[工具调用] " + (payload?.tool || ""), payload, at }];
+      // 工具调用参数/结果（JSON）不输出
+      return [];
     case "hitl":
-      return [{ role: "system", type, text: `等待审批：${payload?.tool || ""}`, payload, at }];
+      return [{
+        role: "system", type,
+        text: `等待管理者确认：${TOOL_LABEL[payload?.tool] || payload?.tool || "执行高风险操作"}`,
+        at,
+      }];
     case "deliver":
       return [{ role: "assistant", type, text: payload?.summary || "工单已完成", payload, at }];
     case "state_transition":
-      return [{ role: "system", type, text: `状态：${payload?.from} → ${payload?.to}`, at }];
+      return [{
+        role: "system", type,
+        text: `状态：${STATUS_LABEL[payload?.from] || payload?.from} → ${STATUS_LABEL[payload?.to] || payload?.to}`,
+        at,
+      }];
+    case "closed":
+      return [{ role: "system", type, text: "工单已关闭", at }];
+    case "confirmed":
+      return [{ role: "system", type, text: "客户已确认完成，工单已完成", at }];
     default:
-      return [{ role: "system", type, text: `[${type}] ${dump(payload)}`, at }];
+      // log / rewrite / reject_followup 等内部事件不展示
+      return [];
   }
 }
 
@@ -81,29 +108,6 @@ function buildMsgs(msgs: Msg[], evts: any[]): Msg[] {
 }
 
 function MsgView({ m }: { m: Msg }) {
-  if (m.type === "tool_call") {
-    const p = m.payload || {};
-    const params = dump(p.params);
-    const result = p.result !== undefined ? dump(p.result) : "";
-    return (
-      <details className="tool-card">
-        <summary><span>🔧</span><strong>{p.tool || "工具调用"}</strong><span className="muted">点击展开参数与结果</span></summary>
-        <div className="tc-body">
-          <div className="tc-kv"><div className="tc-label">参数</div><pre>{params}</pre></div>
-          {result !== "" && <div className="tc-kv"><div className="tc-label">结果</div><pre>{result}</pre></div>}
-        </div>
-      </details>
-    );
-  }
-  if (m.type === "hitl") {
-    const p = m.payload || {};
-    return (
-      <div className="hitl-card">
-        <div>⏳ 等待审批 · {p.tool || "工具"}</div>
-        <div className="muted">参数：{dump(p.params)}</div>
-      </div>
-    );
-  }
   if (m.type === "deliver") {
     return <div className="deliver-card">✅ {m.text}</div>;
   }
@@ -125,12 +129,13 @@ export default function Tickets() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [input, setInput] = useState("");
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const chatRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const stopStreamRef = useRef<(() => void) | null>(null);
-  const stopPollRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     try { setTickets(await listTickets()); } catch { /* */ }
@@ -138,10 +143,42 @@ export default function Tickets() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // 活跃工单实时刷新：轮询对话与状态（多轮追问、关闭确认条、列表状态同步更新）
+  useEffect(() => {
+    if (active === null) return;
+    const iv = window.setInterval(async () => {
+      try {
+        const [t2, evts] = await Promise.all([getTicket(active), getConversation(active)]);
+        setActiveTicket(t2);
+        setMsgs(buildMsgs(
+          [{ role: "user", text: `${t2.title}\n\n${t2.description}`, at: t2.created_at }],
+          evts,
+        ));
+        setTickets(await listTickets());
+      } catch { /* ignore */ }
+    }, 1000);
+    return () => window.clearInterval(iv);
+  }, [active]);
+
+  // 滚动跟随：仅当用户停留在底部附近时才自动滚动，避免查看历史时被拉回。
+  // 注意 chat-area 是条件渲染的（未选工单时不存在），因此监听绑在 document
+  // 的捕获阶段，运行时动态取 chatRef.current，避免绑定时机与挂载时机耦合。
+  const stickToBottomRef = useRef(true);
+
+  useEffect(() => {
+    const onScroll = (e: Event) => {
+      const el = chatRef.current;
+      if (!el || e.target !== el) return;
+      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", onScroll, { capture: true });
+  }, []);
+
   useEffect(() => {
     const el = chatRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [msgs]);
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [msgs, busy]);
 
   useEffect(() => {
     const el = listRef.current?.querySelector(`[data-id="${active}"]`);
@@ -149,7 +186,6 @@ export default function Tickets() {
   }, [active, filter, q]);
 
   useEffect(() => () => {
-    if (stopPollRef.current !== null) window.clearInterval(stopPollRef.current);
     stopStreamRef.current?.();
   }, []);
 
@@ -157,14 +193,12 @@ export default function Tickets() {
 
   function closeNew() {
     stopStreamRef.current?.();
-    if (stopPollRef.current !== null) { window.clearInterval(stopPollRef.current); stopPollRef.current = null; }
     setModalOpen(false);
     setMsg("");
     setFormErr("");
   }
 
   function stopLive() {
-    if (stopPollRef.current !== null) { window.clearInterval(stopPollRef.current); stopPollRef.current = null; }
     stopStreamRef.current?.();
     stopStreamRef.current = null;
   }
@@ -172,6 +206,7 @@ export default function Tickets() {
   async function view(id: number) {
     stopLive();
     setMsg(""); setBusy(true);
+    stickToBottomRef.current = true; // 切换工单后回到底部
     try {
       const ticket = await getTicket(id);
       const evts = await getConversation(id);
@@ -187,6 +222,7 @@ export default function Tickets() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setMsg(""); setFormErr(""); setBusy(true);
+    stickToBottomRef.current = true; // 新建工单后回到底部
     const userText = `${form.title}\n\n${form.description}`;
     try {
       const t = await createTicket(form);
@@ -194,10 +230,7 @@ export default function Tickets() {
       setModalOpen(false);
       setActive(t.id);
       setActiveTicket(t);
-      setMsgs([
-        { role: "user", text: userText, at: t.created_at },
-        { role: "system", type: "created", text: "工单已创建", at: new Date().toISOString() },
-      ]);
+      setMsgs([{ role: "user", text: userText, at: t.created_at }]);
       await refresh();
 
       // 实时流（WebSocket，尽力而为；依赖 nginx 已开启 WS 升级）
@@ -205,15 +238,7 @@ export default function Tickets() {
         setMsgs((prev) => [...prev, ...eventToMsg(ev)]);
       });
 
-      // 兜底实时刷新：轮询完整对话，直到 run 结束。
-      stopPollRef.current = window.setInterval(async () => {
-        try {
-          const evts = await getConversation(t.id);
-          setMsgs(buildMsgs([{ role: "user", text: userText, at: t.created_at }], evts));
-        } catch { /* ignore */ }
-      }, 1000);
-
-      // 后台触发 Agent 工作流，不阻塞 UI；结束后收敛同步并刷新列表状态。
+      // 后台触发 Agent 工作流，不阻塞 UI；活跃工单轮询会自动同步对话与状态。
       runTicket(t.id)
         .then(async () => {
           const evts = await getConversation(t.id);
@@ -231,11 +256,65 @@ export default function Tickets() {
     }
   }
 
+  // 多轮对话：追加提问 / 补充信息（待确认完成 / failed 状态可发）
+  async function send() {
+    const content = input.trim();
+    if (!content || active === null) return;
+    setMsg(""); setInput(""); setBusy(true);
+    const tid = active;
+    try {
+      await sendMessage(tid, content);
+    } catch (ex: any) {
+      setMsg(ex.message);
+      setInput(content); // 发送失败时保留输入内容，避免误丢
+      const t2 = await getTicket(tid).catch(() => null);
+      if (t2) setActiveTicket(t2);
+    } finally {
+      // 回合结束（含拒绝）→ 用最新对话重建
+      try {
+        const [t2, evts] = await Promise.all([getTicket(tid), getConversation(tid)]);
+        setActiveTicket(t2);
+        setMsgs(buildMsgs(
+          [{ role: "user", text: `${t2.title}\n\n${t2.description}`, at: t2.created_at }],
+          evts,
+        ));
+        setTickets(await listTickets());
+      } catch { /* ignore */ }
+      setBusy(false);
+    }
+  }
+
+  // 客户确认完成（pending_confirm → 已完成，工单走到最后）
+  async function doConfirm() {
+    if (active === null) return;
+    setMsg(""); setBusy(true);
+    try {
+      const t = await confirmTicket(active);
+      setActiveTicket(t);
+      setTickets(await listTickets());
+    } catch (ex: any) { setMsg(ex.message); }
+    finally { setBusy(false); }
+  }
+
+  const status = activeTicket?.status;
+  const canChat = active !== null && (status === "pending_confirm" || status === "failed") && !busy;
+
+  const inputPlaceholder = (() => {
+    if (!active) return "";
+    if (busy) return "正在处理中，请稍候…";
+    if (status === "awaiting_approval") return "工单正在等待管理者确认，暂不能追加提问";
+    if (status === "archived") return "工单已关闭，无法追加提问";
+    if (status === "done") return "工单已完成，无法追加提问";
+    if (status === "pending_confirm") return "本轮处理已完成，可确认完成或继续追问…";
+    if (status === "failed") return "工单处理失败，可补充信息后重试…";
+    return "工单正在处理中，请稍候…";
+  })();
+
   const filtered = useMemo(() => {
     return tickets.filter((t) => {
       if (filter === "pending") return t.status === "awaiting_approval";
       if (filter === "running") return IN_PROGRESS.includes(t.status);
-      if (filter === "done") return t.status === "done";
+      if (filter === "done") return t.status === "done" || t.status === "archived";
       if (filter === "failed") return t.status === "failed";
       return true;
     }).filter((t) => {
@@ -246,9 +325,9 @@ export default function Tickets() {
   }, [tickets, filter, q]);
 
   const statusClass = (s: string) => {
-    if (s === "done") return "done";
+    if (s === "done" || s === "archived") return "done";
     if (s === "failed") return "failed";
-    if (s === "awaiting_approval") return "awaiting_approval";
+    if (s === "awaiting_approval" || s === "pending_confirm") return "awaiting_approval";
     return "processing";
   };
 
@@ -290,7 +369,7 @@ export default function Tickets() {
           </div>
         </div>
 
-        {/* 右栏：详情头 + 对话 + 底部状态条 */}
+        {/* 右栏：详情头 + 对话 + 底部输入区 */}
         <div className="card chat-panel">
           {active === null ? (
             <div className="chat-empty">
@@ -304,7 +383,7 @@ export default function Tickets() {
                   <span className={`badge ${activeTicket ? statusClass(activeTicket.status) : "processing"}`}>
                     {activeTicket ? STATUS_LABEL[activeTicket.status] || activeTicket.status : ""}
                   </span>
-                  {activeTicket && <span className={`badge ${activeTicket.risk_level || "low"}`}>{activeTicket.risk_level || "low"}</span>}
+                  {activeTicket && <span className={`badge ${activeTicket.risk_level || "low"}`}>{RISK_LABEL[activeTicket.risk_level] || activeTicket.risk_level || "低"}</span>}
                   {activeTicket && <span>{INTENT_LABEL[activeTicket.intent_type] || activeTicket.intent_type}</span>}
                   <span>创建于 {fmtTime(activeTicket?.created_at)}</span>
                   {busy && <span className="muted">加载中…</span>}
@@ -321,8 +400,29 @@ export default function Tickets() {
                 )}
               </div>
               <div className="chat-foot">
-                <span>🔒</span>
-                <span className="muted">该工单对话为只读；如需新的任务，请点击右上角「新建工单」。</span>
+                {/* 处理中（发送追问/确认中）隐藏确认条，回合结束回到待确认再出现 */}
+                {status === "pending_confirm" && !busy && (
+                  <div className="close-bar">
+                    <span>✅ 本轮处理已完成，是否确认完成工单？</span>
+                    <div className="cb-actions">
+                      <button className="ok" onClick={doConfirm} disabled={busy}>确认完成</button>
+                      <button className="secondary" onClick={() => inputRef.current?.focus()} disabled={busy}>继续追问</button>
+                    </div>
+                  </div>
+                )}
+                <div className="chat-input-row">
+                  <input
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={inputPlaceholder}
+                    disabled={!canChat}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && canChat && input.trim()) send();
+                    }}
+                  />
+                  <button onClick={send} disabled={!canChat || !input.trim()}>发送</button>
+                </div>
               </div>
             </>
           )}

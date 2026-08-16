@@ -18,6 +18,7 @@ from .prompts.classifier import (
     classify_prompt,
     relevance_prompt,
     rewrite_prompt,
+    followup_relevance_prompt,
 )
 
 INTENTS = {"knowledge", "data_query", "change", "troubleshoot"}
@@ -136,6 +137,46 @@ def relevance_check(title: str, description: str) -> dict:
     log("info", "relevance_check", "兜底2")
     return {"relevant": True, "reason": "离线规则：无法确认相关性时放行",
             "source": "rule"}
+
+def followup_relevance_check(ticket_title: str, ticket_desc: str,
+                             recent_dialogue: str, content: str) -> dict:
+    """追加提问前相关性确认：追加内容是否与当前工单相关。
+
+    返回 {relevant: bool, reason: str, source: str}。
+    - LLM 明确判定不相关才拒绝（relevant=False）；
+    - LLM 不可用/模糊判定时一律放行（relevant=True, source=rule），避免误拦正常追问。
+    """
+    prompt = followup_relevance_prompt(ticket_title, ticket_desc,
+                                       recent_dialogue, content)
+
+    if settings.openrouter_api_key:
+        try:
+            result = chat_with_fallback(
+                [{"role": "user", "content": prompt}],
+                primary_model=settings.relevance_model,
+                fallback_model=settings.relevance_fallback_model,
+                fallback_base_url=settings.ollama_base_url,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens_classify,
+                raise_if_reader=True,
+            )
+            data = _parse_json(result.content or "")
+            if enabled():
+                log("info", "followup_relevance_check", f"result={result.content}")
+            if data and isinstance(data.get("relevant"), bool):
+                return {"relevant": data["relevant"],
+                        "reason": data.get("reason", ""), "source": "llm"}
+        except Exception:
+            log("info", "followup_relevance_check", "LLM 异常")
+            pass
+
+    # 规则兜底：明确的非 IT 闲聊信号 → 不相关；其余一律放行（宁放过不误拦）
+    if any(k in content for k in NON_IT_KEYWORDS):
+        return {"relevant": False,
+                "reason": "该内容与当前工单无关（疑似闲聊）", "source": "rule"}
+    return {"relevant": True, "reason": "离线规则：无法确认相关性时放行",
+            "source": "rule"}
+
 
 def rewrite_content(title: str, description: str) -> dict:
     """提示词重写：把原始工单内容总结归纳成简洁的目标，再并入提示词。

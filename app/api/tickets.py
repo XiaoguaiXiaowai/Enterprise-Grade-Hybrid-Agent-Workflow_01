@@ -1,6 +1,7 @@
 """工单路由：CRUD + 触发运行 + 事件/SSE + 对话记录。租户隔离 + RBAC。"""
 import asyncio
 import json
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -11,7 +12,7 @@ from ..deps import current_user, require_role
 from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
-from ..classifier import classify, relevance_check, rewrite_content
+from ..classifier import classify, relevance_check, rewrite_content, followup_relevance_check
 from ..config import settings as _settings
 from ..tracelog import trace_call, enabled, log
 
@@ -19,6 +20,15 @@ router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
 RISK_LEVELS = {"low", "medium", "high"}
 INTENTS = {"knowledge", "data_query", "change", "troubleshoot"}
+
+# 追加提问并发保护：同一工单同时只能有一个追加回合在跑
+_followup_locks: dict[int, threading.Lock] = {}
+_followup_locks_guard = threading.Lock()
+
+
+def _followup_lock(ticket_id: int) -> threading.Lock:
+    with _followup_locks_guard:
+        return _followup_locks.setdefault(ticket_id, threading.Lock())
 
 
 class TicketIn(BaseModel):
@@ -120,6 +130,113 @@ def run(ticket_id: int, ctx: dict = Depends(current_user)):
         raise HTTPException(status_code=403, detail="无权访问")
     result = run_ticket(ticket_id, actor=ctx["username"])
     return result
+
+
+class FollowupIn(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
+def _recent_dialogue(ticket_id: int, limit: int = 6) -> str:
+    """取最近几条对话事件拼成简短文本，供追加内容相关性校验参考。"""
+    lines = []
+    for e in reversed(daos.list_events(ticket_id)):
+        try:
+            payload = json.loads(e["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        if e["event_type"] == "user_message":
+            lines.append(f"用户：{payload.get('content', '')}")
+        elif e["event_type"] == "deliver":
+            lines.append(f"助手：{str(payload.get('summary', ''))[:200]}")
+        elif e["event_type"] == "model_call" and payload.get("kind") == "final":
+            lines.append(f"助手：{str(payload.get('content', ''))[:200]}")
+        if len(lines) >= limit:
+            break
+    return "\n".join(reversed(lines))
+
+
+@router.post("/{ticket_id}/messages")
+@trace_call("api.tickets.followup")
+def followup(ticket_id: int, body: FollowupIn, ctx: dict = Depends(current_user)):
+    """多轮对话：工单完成后用户追加提问/补充信息。
+
+    - 状态守卫：已关闭/等待管理者确认/处理中 → 409 拒绝
+    - 追加内容相关性校验（LLM）：不相关 → 回复拒绝文案，不跑 Agent
+    - 相关 → 写入 user_message 事件并触发新一轮 Agent 执行
+    """
+    with _followup_lock(ticket_id):
+        row = daos.get_ticket(ticket_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="工单不存在")
+        if row["tenant_id"] != ctx["tenant_id"]:
+            raise HTTPException(status_code=403, detail="无权访问")
+
+        status = row["status"]
+        if status == "archived":
+            raise HTTPException(status_code=409, detail="工单已关闭，无法追加提问")
+        if status == "done":
+            raise HTTPException(status_code=409, detail="工单已完成，无法追加提问")
+        if status == "awaiting_approval":
+            raise HTTPException(status_code=409, detail="工单正在等待管理者确认，暂不能追加提问")
+        if status in ("created", "triaged", "gathering", "agent_running", "running"):
+            raise HTTPException(status_code=409, detail="工单正在处理中，请稍候再追加")
+        # 其余（pending_confirm / failed）放行
+
+        # 写入用户消息事件（对话记录 + Agent 历史上下文都会带上）
+        daos.add_event(ticket_id, "user_message",
+                       {"content": body.content}, ctx["username"])
+
+        # 追加内容相关性校验：与当前工单不相关 → 回复拒绝
+        if _settings.input_relevance_check:
+            rel = followup_relevance_check(
+                row["title"], row["description"],
+                _recent_dialogue(ticket_id), body.content)
+            if enabled():
+                log("info", "followup", f"relevance_check={rel}")
+            if not rel["relevant"]:
+                reason = rel.get("reason") or ""
+                msg = (f"您追加的内容与当前工单『{row['title']}』不相关，已拒绝处理。"
+                       f"如需其他诉求，请新建工单。")
+                daos.add_event(ticket_id, "reject_followup",
+                               {"reason": reason}, ctx["username"])
+                daos.add_event(ticket_id, "system_message",
+                               {"content": msg}, "system")
+                return {"status": "rejected", "message": msg}
+
+        result = run_ticket(ticket_id, actor=ctx["username"])
+        return {"status": "accepted", "run": result}
+
+
+@router.post("/{ticket_id}/confirm")
+@trace_call("api.tickets.confirm")
+def confirm(ticket_id: int, ctx: dict = Depends(current_user)):
+    """客户确认完成：仅『待确认完成』状态可确认；确认后变更为『已完成』（终态）。"""
+    row = daos.get_ticket(ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    if row["tenant_id"] != ctx["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权访问")
+    if row["status"] != "pending_confirm":
+        raise HTTPException(status_code=409, detail="仅『待确认完成』状态的工单可以确认完成")
+    daos.transition(ticket_id, "done", ctx["username"], reason="客户确认完成")
+    daos.add_event(ticket_id, "confirmed", {"by": ctx["username"]}, ctx["username"])
+    return _serialize(daos.get_ticket(ticket_id))
+
+
+@router.post("/{ticket_id}/close")
+@trace_call("api.tickets.close")
+def close(ticket_id: int, ctx: dict = Depends(current_user)):
+    """关闭工单：仅『已完成』状态可关闭（归档备用路径，UI 已由确认完成替代）。"""
+    row = daos.get_ticket(ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    if row["tenant_id"] != ctx["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权访问")
+    if row["status"] != "done":
+        raise HTTPException(status_code=409, detail="仅『已完成』状态的工单可以关闭")
+    daos.transition(ticket_id, "archived", ctx["username"], reason="用户确认关闭")
+    daos.add_event(ticket_id, "closed", {"by": ctx["username"]}, ctx["username"])
+    return _serialize(daos.get_ticket(ticket_id))
 
 
 @router.get("/{ticket_id}/conversation")

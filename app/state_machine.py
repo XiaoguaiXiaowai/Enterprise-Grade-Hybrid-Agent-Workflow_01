@@ -3,7 +3,8 @@ from dataclasses import dataclass, field
 
 VALID_STATUSES = {
     "created", "triaged", "gathering", "agent_running",
-    "awaiting_approval", "running", "done", "failed", "cancelled", "archived",
+    "awaiting_approval", "running", "pending_confirm",
+    "done", "failed", "cancelled", "archived",
 }
 
 # 允许的转移表
@@ -11,11 +12,14 @@ TRANSITIONS = {
     "created":          {"triaged"},
     "triaged":          {"gathering", "failed"},
     "gathering":        {"agent_running", "awaiting_approval", "failed", "cancelled"},
-    "agent_running":    {"gathering", "awaiting_approval", "done", "failed", "cancelled"},
+    "agent_running":    {"gathering", "awaiting_approval", "pending_confirm", "failed", "cancelled"},
     "awaiting_approval": {"running", "gathering", "cancelled", "failed"},
     "running":          {"done", "failed", "cancelled"},
-    # 多轮对话：完成/失败后用户可追加提问 → 回到 gathering 开新一轮
-    "done":             {"archived", "gathering"},
+    # 待客户确认完成：确认 → done（终态）；继续追问 → gathering 开新一轮
+    "pending_confirm":  {"done", "gathering"},
+    # done = 客户确认完成，工单走到最后（不再允许追问）；archived 为归档/关闭备用路径
+    "done":             {"archived"},
+    # failed 允许补充信息后重试（→ gathering）
     "failed":           {"archived", "gathering"},
     "cancelled":        {"archived"},
     "archived":         set(),
