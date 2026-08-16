@@ -1,0 +1,27 @@
+# 生产部署编排（阿里云单机 · playground.pangliantagege.top）
+# 与 docker-compose.yml（本地开发）的区别：
+#   - 不启动项目自带 nginx 容器：主机 nginx 已占用 80/443 并终止 TLS（certbot 证书），
+#     站点配置见 deploy/nginx/playground.conf
+#   - 端口绑定对齐主机 nginx 反代目标：app -> 127.0.0.1:8001，web -> 127.0.0.1:3000
+# 用法: docker compose -f docker-compose.prod.yml up -d --build
+# 自动部署: push main 后由 GitHub Actions 触发（.github/workflows/deploy.yml）
+services:
+  app:
+    build: .
+    env_file: .env
+    volumes:
+      - "./data:/app/data"
+      - "./logs:/app/logs"      # 函数级调用日志落到宿主机 logs/
+    ports:
+      - "127.0.0.1:8001:8000"   # 仅本机可达，由主机 nginx 反代
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      # 不注入 base URL：前端走同源 /api，由主机 nginx 反代到后端
+    ports:
+      - "127.0.0.1:3000:3000"   # 仅本机可达，由主机 nginx 反代
+    restart: unless-stopped
+    depends_on:
+      - app
