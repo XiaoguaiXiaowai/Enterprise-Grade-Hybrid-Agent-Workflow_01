@@ -3,10 +3,12 @@
 用法：.venv/bin/python scripts/smoke_agents.py
 要求：已设置 OPENROUTER_API_KEY（.env 或环境变量），可访问 openrouter.ai
 覆盖：
-  1. 低风险知识工单 → SDK 工具循环 → done
-  2. 高风险工单 → SDK 原生中断(interruptions) → awaiting_approval → 审批通过 → 恢复 → done
-  3. 多 Agent handoff：trace 应含 TriageAgent 与对应子 Agent 的 agent span
-  4. trace 落库 + 工具调用记录
+  1. 低风险知识工单 → SDK 工具循环 → 回合收敛(pending_confirm)
+  2. 高风险工单 → SDK 原生中断(interruptions) → awaiting_approval → 审批通过 → 恢复 → 收敛
+  3. 跨进程恢复（P2-11）：清空内存 _PENDING 模拟重启 → 审批仍可从 DB 的
+     RunState 序列化恢复
+  4. 多 Agent handoff：trace 应含 TriageAgent 与对应子 Agent 的 agent span
+  5. trace 落库 + 工具调用记录
 """
 import os
 import sys
@@ -52,6 +54,24 @@ def _assert_agents_traced(tid, expected):
     assert not missing, f"期望的 Agent span 未出现: {missing}"
 
 
+def _make_high_risk_approval(admin_id, label: str, attempts: int = 3):
+    """建高风险工单并触发 HITL。
+
+    真模型输出有随机性（可能本轮不调用 grant 直接收敛），最多尝试 attempts 次、
+    每次用不同用户编号，直到拿到 awaiting_approval。返回 (ticket_id, result)。
+    """
+    for attempt in range(attempts):
+        principal = f"u-{10 + attempt}{int(admin_id) % 10}"
+        tid = daos.create_ticket(1, admin_id, f"给 {principal} 开通数据库只读账号",
+                                 f"为 {principal} 申请数据库只读权限", risk_level="high",
+                                 intent_type="change")
+        r = run_ticket(tid, actor="admin")
+        if r["status"] == "awaiting_approval":
+            return tid, r
+        print(f"  [{label}] 第 {attempt + 1} 次尝试未触发 HITL（{r['status']}），换用户重试…")
+    raise AssertionError(f"[{label}] 多次尝试均未触发 HITL")
+
+
 def main():
     os.environ["APP_DB_PATH"] = "/tmp/agents_smoke.db"
     init_db()
@@ -65,16 +85,14 @@ def main():
     r = run_ticket(tid, actor="admin")
     t = daos.get_ticket(tid)
     print(f"[场景1] id={tid} result={r['status']} status={t['status']}")
-    assert r["status"] == "done" and t["status"] == "done", r
+    # 当前设计：回合收敛到 pending_confirm（待客户确认完成），确认后才变 done
+    assert r["status"] == "done" and t["status"] == "pending_confirm", r
     print("  工具调用:", _tool_calls(tid))
     assert len(trace_mod.list_for_ticket(tid)) > 0, "trace 未写入"
     _assert_agents_traced(tid, ("TriageAgent", "KnowledgeAgent"))
 
-    # ---- 场景 2：高风险工单 → SDK 原生中断 → 审批恢复 ----
-    tid2 = daos.create_ticket(1, admin_id, "给 u-1024 开通数据库只读账号",
-                              "为 u-1024 申请数据库只读权限", risk_level="high",
-                              intent_type="change")
-    r2 = run_ticket(tid2, actor="admin")
+    # ---- 场景 2：高风险工单 → SDK 原生中断 → 审批恢复（内存路径） ----
+    tid2, r2 = _make_high_risk_approval(admin_id, "场景2")
     t2 = daos.get_ticket(tid2)
     print(f"[场景2] result={r2}")
     assert r2["status"] == "awaiting_approval", r2
@@ -86,19 +104,37 @@ def main():
     print("  审批单:", {**dict(daos.get_approval(aid))})
     assert daos.get_approval(aid)["status"] == "pending"
 
-    # 审批通过并恢复（走 SDK resume）
+    # 审批通过并恢复（走 SDK resume，内存 _PENDING 热路径）
     daos.decide_approval(aid, "approved", "operator", "同意")
     r2b = resume_ticket(tid2, aid, actor="operator")
     t2b = daos.get_ticket(tid2)
     print(f"[场景2 恢复] result={r2b}")
     assert r2b["status"] == "done", r2b
-    assert t2b["status"] == "done", t2b
+    assert t2b["status"] == "pending_confirm", t2b
     _assert_agents_traced(tid2, ("TriageAgent", "ChangeAgent"))
+
+    # ---- 场景 3：跨进程恢复（P2-11）——清空内存注册表，从 DB 恢复 RunState ----
+    tid3, r3 = _make_high_risk_approval(admin_id, "场景3")
+    print(f"[场景3] result={r3}")
+    aid3 = r3["approvals"][0]["approval_id"]
+    ap3 = dict(daos.get_approval(aid3))
+    assert ap3.get("run_state_json"), "RunState 未落库（跨重启恢复数据缺失）"
+
+    import app.agents_runner as ar
+    ar._PENDING.clear()  # 模拟进程重启：内存恢复数据全部丢失
+    daos.decide_approval(aid3, "approved", "operator", "同意")
+    r3b = resume_ticket(tid3, aid3, actor="operator")
+    t3b = daos.get_ticket(tid3)
+    print(f"[场景3 跨进程恢复] result={r3b}")
+    assert r3b["status"] == "done", f"跨进程恢复失败: {r3b}"
+    assert t3b["status"] == "pending_confirm", t3b
+    _assert_agents_traced(tid3, ("TriageAgent", "ChangeAgent"))
 
     print("\n场景1 trace:")
     for tr in trace_mod.list_for_ticket(tid):
         print("  ", tr["provider"], tr["model"], "|", tr["context_source"], "|", str(tr["io_json"])[:100])
     print("场景2 trace:", len(trace_mod.list_for_ticket(tid2)), "条")
+    print("场景3 trace:", len(trace_mod.list_for_ticket(tid3)), "条")
     print("\nAGENTS SMOKE OK")
 
 

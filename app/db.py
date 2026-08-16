@@ -140,6 +140,16 @@ CREATE TABLE IF NOT EXISTS metrics (
     human_takeover INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER REFERENCES tickets(id),   -- 可空：工具调用不感知工单号，留审计关联位
+    principal TEXT NOT NULL,
+    grant_type TEXT NOT NULL,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',   -- active | revoked | expired
+    expires_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -156,6 +166,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN trace_req_id TEXT")
     if "final_answer" not in cols:
         conn.execute("ALTER TABLE tickets ADD COLUMN final_answer TEXT")
+    # P2-11：审批跨重启恢复——approvals 表补 RunState 序列化与恢复所需列
+    acols = {r["name"] for r in conn.execute("PRAGMA table_info(approvals)")}
+    if "run_state_json" not in acols:
+        conn.execute("ALTER TABLE approvals ADD COLUMN run_state_json TEXT")
+    if "routing_json" not in acols:
+        conn.execute("ALTER TABLE approvals ADD COLUMN routing_json TEXT")
+    if "run_ctx_json" not in acols:
+        conn.execute("ALTER TABLE approvals ADD COLUMN run_ctx_json TEXT")
+    if "budget_json" not in acols:
+        conn.execute("ALTER TABLE approvals ADD COLUMN budget_json TEXT")
+    if "req_id" not in acols:
+        conn.execute("ALTER TABLE approvals ADD COLUMN req_id TEXT")
+    if "raw_item_json" not in acols:
+        conn.execute("ALTER TABLE approvals ADD COLUMN raw_item_json TEXT")
     conn.commit()
 
 

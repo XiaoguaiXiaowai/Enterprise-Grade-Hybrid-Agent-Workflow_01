@@ -19,7 +19,25 @@ MIN_CTX_TRUNCATE = settings.ctx_min_truncate  # 历史条数超过则触发 auto
 def _compress_obs(text: str) -> str:
     if len(text) <= MAX_OBS_LEN:
         return text
-    # 压：长内容截到头部+尾部要点（M2 可替换为模型 summarize）
+    # 压：优先 LLM 摘要（CTX_LLM_COMPRESS 开启时），失败回退头尾截断
+    if settings.ctx_llm_compress:
+        try:
+            from .llm_gateway import chat_with_fallback
+            res = chat_with_fallback(
+                [{"role": "system", "content":
+                  "你是企业 IT 工单系统的上下文压缩器。把下面的工具/观察结果压缩为要点摘要，"
+                  "保留关键事实、编号、时间与结论，200 字以内，只输出摘要。"},
+                 {"role": "user", "content": text[:6000]}],
+                primary_model=settings.agent_model,
+                fallback_model=settings.agent_fallback_model,
+                max_tokens=256,
+                raise_if_reader=True,  # reader 是模板输出，不适合当摘要 → 失败即回退截断
+            )
+            new = (res.content or "").strip()
+            if new:
+                return f"[LLM 压缩] {new}"
+        except Exception:  # noqa: BLE001
+            pass
     head = text[:400].replace("\n", " ")
     tail = text[-120].replace("\n", " ")
     return f"[已压缩 {len(text)}→520] {head} … {tail}"

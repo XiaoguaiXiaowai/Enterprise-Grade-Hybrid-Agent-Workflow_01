@@ -58,6 +58,9 @@ class Settings:
     ctx_max_obs_len: int = int(os.getenv("CTX_MAX_OBS_LEN", "1200"))
     ctx_min_truncate: int = int(os.getenv("CTX_MIN_TRUNCATE", "30"))
     dedup_window_minutes: int = int(os.getenv("DEDUP_WINDOW_MINUTES", "5"))
+    # 长 observation 用 LLM 摘要压缩（默认关，零额外成本；开启后 LLM 失败自动回退截断）
+    ctx_llm_compress: bool = os.getenv(
+        "CTX_LLM_COMPRESS", "false").lower() in ("1", "true", "yes", "on")
 
     # ===== 整改②：安全参数 =====
     pbkdf2_iterations: int = int(os.getenv("PBKDF2_ITERATIONS", "100000"))

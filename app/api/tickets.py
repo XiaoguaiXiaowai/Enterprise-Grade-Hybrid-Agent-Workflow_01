@@ -244,6 +244,29 @@ def confirm(ticket_id: int, ctx: dict = Depends(current_user)):
     return _serialize(daos.get_ticket(ticket_id))
 
 
+@router.post("/{ticket_id}/cancel")
+@trace_call("api.tickets.cancel")
+def cancel(ticket_id: int, ctx: dict = Depends(current_user)):
+    """取消工单（P2-12 接线）：未完成状态均可取消；未决审批一并置为 rejected。
+
+    注意：agent_running（执行线程正在跑）不可取消——同步执行无法安全中断线程，
+    请等待本回合结束（进入 pending_confirm/awaiting_approval）后再取消。
+    """
+    row = daos.get_ticket(ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    _ensure_access(row, ctx)
+    if row["status"] in ("agent_running", "running", "done", "archived", "cancelled"):
+        raise HTTPException(status_code=409,
+                            detail=f"当前状态（{row['status']}）不可取消")
+    daos.transition(ticket_id, "cancelled", ctx["username"],
+                    reason=f"用户取消：{ctx['username']}")
+    for ap in _daos.pending_for_ticket(ticket_id):
+        _daos.decide_approval(ap["id"], "rejected", ctx["username"], "工单已取消")
+    daos.add_event(ticket_id, "cancelled", {"by": ctx["username"]}, ctx["username"])
+    return _serialize(daos.get_ticket(ticket_id))
+
+
 @router.post("/{ticket_id}/close")
 @trace_call("api.tickets.close")
 def close(ticket_id: int, ctx: dict = Depends(current_user)):
@@ -273,6 +296,11 @@ def conversation(ticket_id: int, ctx: dict = Depends(current_user)):
 @router.get("/{ticket_id}/events")
 @trace_call("api.tickets.events")
 def events(ticket_id: int, token: str | None = None):
+    """[deprecated] SSE 事件流（长轮询实现）。
+
+    前端已改用 WebSocket（/ws）实时推送，本端点保留仅为兼容旧客户端/EventSource，
+    新功能请走 WS；后续版本可移除。
+    """
     # 兼容 EventSource（无法带自定义 header）——允许经 query token 复用会话
     ctx = resolve_token(token) if token else None
     if ctx is None:

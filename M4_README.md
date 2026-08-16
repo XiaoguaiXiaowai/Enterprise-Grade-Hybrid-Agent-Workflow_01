@@ -70,6 +70,10 @@ APP_DB_PATH=/tmp/m2_reg.db python scripts/smoke_m2.py
 SDK 连不上 → `SdkUnavailable` → 自动降级传统 `LLMGateway`/reader，HITL 演示保留。
 
 ## 已知边界 / 演进点
-- **审批 `RunState` 存进程内内存**（`agents_runner._PENDING`），服务重启后未完成审批需重新触发工单；若需跨重启可改 `RunState.to_json()` 落库 + `from_json`（async）恢复（需把 resume 路由改 `async def`）。
+- **审批跨重启恢复**（P2-11）：审批时 `RunState` 序列化落库（`approvals.run_state_json`），
+  进程重启后可从 DB 反序列化恢复同一 run（`agents_runner._resume_from_db`）；内存
+  `_PENDING` 仍是同进程内的热路径。
+- **SDK 路径预算**（P0 整改）：token 按每次模型调用累计（`_process_result` →
+  `budget.consume_tokens`），时间预算回合终检；步数由工具调用 + `max_turns` 限制。
 - 子 Agent 当前继承同一配置模型；`agents_defs.model_fn` 已预留按 Agent 差异化配置模型（如 Knowledge 用轻量、Change 用强模型）的能力点。
-- M3 之前的手写 `_parse_tool_calls` 在 SDK 路径已不再使用，完全由 SDK 的 handoff + function_tool 接管。
+- M3 之前的手写 `_parse_tool_calls` 在 SDK 路径已不再使用，完全由 SDK 的 handoff + function_tool 接管（传统降级链路保留，参数按工具签名规范化）。

@@ -116,6 +116,9 @@ export function closeTicket(id: number) {
 export function confirmTicket(id: number) {
   return req<any>(`/api/tickets/${id}/confirm`, { method: "POST" });
 }
+export function cancelTicket(id: number) {
+  return req<any>(`/api/tickets/${id}/cancel`, { method: "POST" });
+}
 export function getApprovals(ticketId: number) {
   return req<any[]>(`/api/tickets/${ticketId}/approvals`);
 }
@@ -127,6 +130,11 @@ export function approve(ticketId: number, approvalId: number, decision: string, 
 }
 export function getMetrics() {
   return req<any>("/api/metrics");
+}
+
+// 工单执行 Trace 回放（治理层审计：模型/工具调用/状态变迁全链路）
+export function getTraces(ticketId: number) {
+  return req<any[]>(`/api/traces/${ticketId}`);
 }
 
 // 基于 WebSocket 实时订阅工单事件流（先回放历史事件，再增量推送；token 经 query 传递）

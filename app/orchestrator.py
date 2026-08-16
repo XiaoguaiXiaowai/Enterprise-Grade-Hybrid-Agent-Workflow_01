@@ -5,9 +5,11 @@
 - LLM 只负责"判断下一步计划"；执行权在 harness（预算/守卫/HITL）
 - 无真实后端时 LLM 网关自动回退离线 reader，保证可演示/可测
 """
+import inspect
 import json
 import re
 import time
+from datetime import datetime
 
 from . import daos, trace as trace_mod, metrics as metrics_mod
 from .tracelog import trace_call
@@ -53,8 +55,45 @@ def _route_params(ticket, tool: str, goal: str | None = None) -> dict:
         return {"query": goal or txt}
     if tool in ("query_user_dir", "grant_db_readonly", "revoke_db_readonly"):
         m = re.search(r"u-\d+", goal or txt)
-        return {"principal": m.group(0) if m else "u-1001"}
+        # 工单文本里明确给出用户编号 → 补全；否则不默认填充（由 _normalize_tool_params
+        # 按签名校验缺失并给出明确错误，避免静默给 u-1001 授权）
+        return {"principal": m.group(0)} if m else {}
     return {}
+
+
+def _normalize_tool_params(tool: str, params: dict) -> dict:
+    """传统链路参数规范化（P2-14 整改）：
+
+    - 按工具函数签名过滤未知参数（LLM 文本解析可能生成 user_id= 等别名/多余键，
+      直接透传会 TypeError 导致工单 failed）
+    - 常见别名归一化：user_id → principal
+    - 缺失必需参数时抛明确错误（替代原先默认 u-1001 的演示兜底）
+    """
+    tw = registry.get_tool(tool)
+    if tw is None:
+        return params
+    try:
+        sig = inspect.signature(tw.fn)
+    except Exception:  # noqa: BLE001
+        return params
+    names = set(sig.parameters)
+    out: dict = {}
+    for k, v in params.items():
+        if k in names:
+            out[k] = v
+        elif k == "user_id" and "principal" in names:
+            out.setdefault("principal", v)  # 别名归一化，LLM 显式值优先于路由值
+    required = [n for n, p in sig.parameters.items()
+                if p.default is inspect.Parameter.empty
+                and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                               inspect.Parameter.KEYWORD_ONLY)
+                and n not in ("ctx", "self")]
+    missing = [n for n in required if n not in out]
+    if missing:
+        raise RuntimeError(
+            f"工单未提供工具 {tool} 的必需参数 {missing}（如目标用户编号 u-1001），"
+            f"请补充工单描述后重试")
+    return out
 
 
 def _request_hitl(ticket_id, tool, params, actor) -> int:
@@ -68,15 +107,18 @@ def _request_hitl(ticket_id, tool, params, actor) -> int:
 def resume_ticket(ticket_id: int, approval_id: int, actor: str = "system", decision="approve"):
     """HITL 审批后恢复执行。
 
-    - SDK 路径生成的审批：委托 agents_runner 用原生 RunState 恢复/驳回，
-      恢复完成（done/awaiting）后补上状态机收敛
-    - 传统路径生成的审批：走旧 _run_loop 的抓取-执行恢复
+    - SDK 路径生成的审批（内存 _PENDING 命中，或 approvals 表有 run_state_json 落库）：
+      委托 agents_runner 用原生 RunState 恢复/驳回——即使进程重启过也能从 DB 恢复
+      （P2-11）；恢复完成（done/awaiting）后补上状态机收敛
+    - 传统路径生成的审批（无 RunState）：走旧 _run_loop 的抓取-执行恢复
     """
-    if agents_runner.sdk_ok() and approval_id in agents_runner._PENDING:
-        r = agents_runner.resume_run(approval_id, decision, rejection_message=None)
-        if r["status"] in ("done", "awaiting_approval"):
-            _finalize_after_sdk_resume(ticket_id, r, actor)
-        return r
+    if agents_runner.sdk_ok():
+        ap = daos.get_approval(approval_id)
+        if approval_id in agents_runner._PENDING or (ap and ap["run_state_json"]):
+            r = agents_runner.resume_run(approval_id, decision, rejection_message=None)
+            if r["status"] in ("done", "awaiting_approval"):
+                _finalize_after_sdk_resume(ticket_id, r, actor)
+            return r
     return _run_loop(ticket_id, actor, resume_approval_id=approval_id)
 
 
@@ -99,6 +141,10 @@ def _finalize_after_sdk_resume(ticket_id, r, actor):
                         "provider": r.get("provider", ""), "model": r.get("model", "")},
                        actor)
         daos.add_event(ticket_id, "deliver", {"summary": "本轮处理完成，请确认是否完成"}, actor)
+        # 预算/结论回写 + 长期记忆（resume_run 在结果里附带预算统计与 req_id）
+        _finalize_write(ticket_id, ticket,
+                        r.get("_budget_stats") or {}, r.get("_req_id", ""),
+                        r.get("final_output", ""))
         _record_metrics(ticket_id, ticket["intent_type"], success=True)
     elif r["status"] == "awaiting_approval":
         # 恢复后又触发新的中断 → 回到 gathering 并留在 agent_running? 保持 awaiting_approval
@@ -119,6 +165,52 @@ def _walk_transitions(ticket_id, targets, actor, reason="", force_done=True):
 @trace_call("orchestrator.run_ticket")
 def run_ticket(ticket_id: int, actor: str = "system"):
     return _run_loop(ticket_id, actor)
+
+
+def _finalize_round(ticket_id, ticket, budget, req_id, final_output=""):
+    """回合收敛落账：预算用量/版本/结论回写工单 + 长期记忆写入（P0 整改）。
+
+    - tickets 表上的 budget_used_*/prompt_version/trace_req_id/final_answer 列
+      此前只有迁移建列、无业务写入，这里统一回写。
+    - memory 表此前只有读（_load_memo）没有写，这里在每轮收敛时追加一条
+      处理结论，形成跨工单长期记忆（最多保留 N 条，见 daos/memory.py）。
+    """
+    _finalize_write(ticket_id, ticket, {
+        "steps": budget.steps, "tokens": budget.tokens,
+        "seconds": round(budget.elapsed, 1),
+    }, req_id, final_output)
+
+
+def _finalize_write(ticket_id, ticket, stats: dict, req_id: str, final_output: str) -> None:
+    """落账实现（预算统计以 dict 传入，SDK 审批恢复路径也可复用）。"""
+    with db_session() as conn:
+        conn.execute(
+            "UPDATE tickets SET budget_used_steps=?, budget_used_tokens=?, budget_used_seconds=?,"
+            " prompt_version=?, trace_req_id=?, final_answer=? WHERE id=?",
+            (stats.get("steps", 0), stats.get("tokens", 0), stats.get("seconds", 0),
+             agents_runner.PROMPT_VERSION, req_id,
+             (final_output or "")[:2000], ticket_id))
+    summary = (final_output or "本轮处理完成（无最终结论输出）")[:200]
+    daos.append_memory(ticket["tenant_id"], "preferences", {
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "ticket_id": ticket_id,
+        "title": ticket["title"],
+        "intent": ticket["intent_type"], "risk": ticket["risk_level"],
+        "summary": summary,
+    })
+
+
+def _collect_final_answer(ticket_id) -> str:
+    """从事件流取最近一次 final 结论（传统链路/兜底无 sdk_result 时用）。"""
+    for e in reversed(daos.list_events(ticket_id)):
+        if e["event_type"] == "model_call":
+            try:
+                p = json.loads(e["payload_json"] or "{}")
+            except Exception:
+                p = {}
+            if p.get("kind") == "final" and p.get("content"):
+                return p["content"]
+    return ""
 
 
 @trace_call("orchestrator._run_loop")
@@ -154,6 +246,7 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
 
     # 恢复模式：批准过的高危工具 → 直接执行
     resume_call = None
+    sdk_result = None
     if resume_approval_id:
         ap = daos.get_approval(resume_approval_id)
         if ap and ap["status"] == "approved":
@@ -216,8 +309,15 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
         
         # 收敛：回合完成 → 待客户确认完成（pending_confirm），确认后才变 done
         log("info", "orchestrator._run_loop", "7")
+        final_answer = ""
+        if sdk_result and sdk_result.get("final_output"):
+            final_answer = sdk_result.get("final_output")
+        else:
+            # 传统链路 / resume 执行：从事件流取最近 final 结论
+            final_answer = _collect_final_answer(ticket_id)
         daos.transition(ticket_id, "pending_confirm", actor, reason="回合完成，等待客户确认")
         daos.add_event(ticket_id, "deliver", {"summary": "本轮处理完成，请确认是否完成"}, actor)
+        _finalize_round(ticket_id, ticket, budget, req_id, final_output=final_answer)
         _record_metrics(ticket_id, ticket["intent_type"], success=True)
         return {"status": "done", "ticket_id": ticket_id}
 
@@ -248,7 +348,19 @@ class _NeedsApproval(Exception):
 
 
 def actor_role(actor: str) -> str:
-    """M2 占位：用 actor 名推断角色（真实场景改为查用户）。"""
+    """从 users 表取真实角色（P1-8 整改：替代原先按用户名硬判的占位逻辑）。
+
+    查不到（如 actor=system、脚本直调或用户已被删除）时回退旧推断：admin/operator
+    名字直通，其余一律 employee——保证演示/测试链路不因查库失败而中断。
+    """
+    try:
+        with db_session() as conn:
+            row = conn.execute(
+                "SELECT role FROM users WHERE username=? AND is_active=1", (actor,)).fetchone()
+        if row:
+            return row["role"]
+    except Exception:  # noqa: BLE001
+        pass
     if actor in ("admin", "operator"):
         return actor
     return "employee"
@@ -278,11 +390,27 @@ def _load_history(ticket_id) -> list[dict]:
 
 
 def _load_memo(tenant_id) -> str:
-    with db_session() as conn:
-        row = conn.execute(
-            "SELECT value_json FROM memory WHERE tenant_id=? AND key='preferences' ORDER BY id DESC LIMIT 1",
-            (tenant_id,)).fetchone()
-    return row["value_json"] if row else "（暂无长期记忆）"
+    """加载租户长期记忆（memory 表，key='preferences'）并渲染成人类可读文本。
+
+    记忆由工单收敛时写入（daos.append_memory），格式为 JSON 数组；
+    兼容历史直接存文本的情况（原样返回）。
+    """
+    raw = daos.latest_memory(tenant_id, "preferences")
+    if not raw:
+        return "（暂无长期记忆）"
+    try:
+        entries = json.loads(raw)
+        if isinstance(entries, list) and entries:
+            lines = ["历史处理记录（长期记忆）："]
+            for e in entries[-5:]:
+                summary = str(e.get("summary", ""))[:120]
+                lines.append(
+                    f"- {e.get('at', '')} 工单#{e.get('ticket_id', '')}"
+                    f"「{e.get('title', '')}」({e.get('intent', '')}/{e.get('risk', '')}): {summary}")
+            return "\n".join(lines)
+    except Exception:
+        pass
+    return raw
 
 
 def _lookup_rewrite(ticket_id) -> dict | None:
@@ -329,6 +457,15 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
         params = c["params"]
         default_params = _route_params(ticket, c["tool"], goal=goal)
         merged = {**default_params, **params}  # LLM 显式参数优先，缺失用路由兜底
+        try:
+            merged = _normalize_tool_params(c["tool"], merged)
+        except RuntimeError as e:
+            # 缺必需参数（如工单未提供目标用户）：跳过该工具并留痕，不静默失败整单。
+            # 传统链路的文本解析无法区分"条件式"工具名（如 reader 模板里的
+            # "若涉及用户/权限则 query_user_dir"）与真实调用意图。
+            daos.add_event(ticket_id, "log",
+                           {"skipped_tool": c["tool"], "reason": str(e)}, actor)
+            continue
         _execute_tool(ticket_id, c["tool"], merged, actor, budget, req_id,
                       result.provider, result.model)
     # 若无工具但输出 done:true，直接收敛

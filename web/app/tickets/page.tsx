@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Nav from "@/components/Nav";
-import { createTicket, deleteTicket, getConversation, getTicket, getUser, listTickets, runTicket, sendMessage, confirmTicket, subscribeTicketWS } from "@/lib/api";
+import { createTicket, deleteTicket, getConversation, getTicket, getUser, listTickets, runTicket, sendMessage, confirmTicket, cancelTicket, subscribeTicketWS } from "@/lib/api";
 
 type Msg = {
   role: "user" | "assistant" | "system";
@@ -29,6 +29,8 @@ const TOOL_LABEL: Record<string, string> = {
   revoke_db_readonly: "回收数据库只读权限",
 };
 const IN_PROGRESS = ["created", "triaged", "gathering", "agent_running", "running"];
+// 可取消状态（agent_running 执行中不可取消，同步执行无法中断线程）
+const CANCELABLE = ["created", "triaged", "gathering", "awaiting_approval", "pending_confirm", "failed"];
 
 // 解析为北京时间并显示。后端以 UTC 存储（形如 "2026-08-12 09:12:45"，无时区后缀），
 // 这里统一按 UTC 解析再换算成 Asia/Shanghai（北京时间）展示。
@@ -94,6 +96,8 @@ function eventToMsg(e: any): Msg[] {
       }];
     case "closed":
       return [{ role: "system", type, text: "工单已关闭", at }];
+    case "cancelled":
+      return [{ role: "system", type, text: "工单已取消", at }];
     case "confirmed":
       return [{ role: "system", type, text: "客户已确认完成，工单已完成", at }];
     default:
@@ -301,6 +305,20 @@ export default function Tickets() {
     finally { setBusy(false); }
   }
 
+  // 取消工单（未完成状态；未决审批一并作废）
+  async function doCancel() {
+    if (active === null) return;
+    if (!confirm(`确认取消工单 #${active}「${activeTicket?.title || ""}」？取消后未决审批将一并作废。`)) return;
+    setMsg(""); setBusy(true);
+    try {
+      const t = await cancelTicket(active);
+      setActiveTicket(t);
+      setTickets(await listTickets());
+      setMsg(`已取消工单 #${active}`);
+    } catch (ex: any) { setMsg(ex.message); }
+    finally { setBusy(false); }
+  }
+
   // 管理员删除工单（级联清除全部关联数据）
   async function doDelete(id: number) {
     const t = tickets.find((x) => x.id === id);
@@ -415,6 +433,10 @@ export default function Tickets() {
                   {activeTicket && <span className={`badge ${activeTicket.risk_level || "low"}`}>{RISK_LABEL[activeTicket.risk_level] || activeTicket.risk_level || "低"}</span>}
                   {activeTicket && <span>{INTENT_LABEL[activeTicket.intent_type] || activeTicket.intent_type}</span>}
                   <span>创建于 {fmtTime(activeTicket?.created_at)}</span>
+                  <a href={`/traces/${active}`} className="trace-link" title="查看该工单全链路执行 Trace（治理审计）">🔍 Trace</a>
+                  {activeTicket && CANCELABLE.includes(activeTicket.status) && (
+                    <button className="secondary cancel-btn" onClick={doCancel} disabled={busy} title="取消工单（未决审批一并作废）">取消工单</button>
+                  )}
                   {busy && <span className="muted">加载中…</span>}
                 </div>
               </div>

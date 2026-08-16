@@ -14,3 +14,4 @@ web/.next/
 web/.env*
 logs/
 text.log
+*.tsbuildinfo

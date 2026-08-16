@@ -46,6 +46,12 @@ class Budget:
         self.tokens += tokens
         self.check()
 
+    def consume_tokens(self, tokens: int) -> None:
+        """只累计 token 不占步数（SDK 路径：步数由工具调用计，token 由每次模型调用计）。"""
+        if tokens > 0:
+            self.tokens += tokens
+            self.check()
+
     @property
     def left(self) -> dict:
         return {"steps": max(0, self.max_steps - self.steps),

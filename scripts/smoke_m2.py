@@ -24,7 +24,7 @@ def main():
     t1 = daos.get_ticket(tid1)
     print("[场景1 低风险]", r1["status"], "->", t1["status"])
     assert r1["status"] == "done", r1
-    assert t1["status"] == "done"
+    assert t1["status"] == "pending_confirm"  # 回合收敛待确认（确认后才 done）
     n_trace1 = len(trace_mod.list_for_ticket(tid1))
     print("  trace 条数:", n_trace1); assert n_trace1 > 0
 
@@ -45,7 +45,7 @@ def main():
     t2 = daos.get_ticket(tid2)
     print("[场景2 恢复]", r2b["status"], "->", t2["status"])
     assert r2b["status"] == "done", r2b
-    assert t2["status"] == "done"
+    assert t2["status"] == "pending_confirm"  # 回合收敛待确认
 
     print("\n[指标]", metrics_mod.aggregate())
     print("M2 SMOKE OK")

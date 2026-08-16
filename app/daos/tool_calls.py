@@ -19,6 +19,11 @@ def record(ticket_id, tool_name, params, result, status, idempotency_key,
 
 
 def latest_success(ticket_id, tool_name, params):
+    """[deprecated] 查最近一次成功调用（保留未使用）。
+
+    幂等/防重已由 guards.is_duplicate 承担，本函数无调用方；
+    后续版本可移除或接入重试补偿链路。
+    """
     key = fingerprint(f"ticket:{ticket_id}", tool_name, params)
     with session() as conn:
         row = conn.execute(

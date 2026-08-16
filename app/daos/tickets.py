@@ -45,7 +45,7 @@ def delete_ticket(ticket_id) -> bool:
         row = conn.execute("SELECT id FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
         if row is None:
             return False
-        for table in ("ticket_events", "tool_calls", "approvals", "traces", "metrics"):
+        for table in ("ticket_events", "tool_calls", "approvals", "traces", "metrics", "grants"):
             conn.execute(f"DELETE FROM {table} WHERE ticket_id = ?", (ticket_id,))
         conn.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
         return True
