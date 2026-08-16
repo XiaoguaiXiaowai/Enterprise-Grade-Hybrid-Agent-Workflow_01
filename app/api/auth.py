@@ -20,6 +20,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # 演示播种的角色（生产不自动创建）
 SEED_ROLES = ("employee", "operator", "admin")
 
+# 本次进程实际播种的演示密码（仅内存、仅演示环境记录，供登录页提示用）
+_seeded_password: str | None = None
+
 
 def _seed_password() -> str:
     """种子密码：SEED_USER_PASSWORD 环境变量优先，缺省随机生成（不再硬编码）。"""
@@ -34,6 +37,12 @@ class LoginIn(BaseModel):
 class LoginOut(BaseModel):
     token: str
     user: dict
+
+
+class SeedInfoOut(BaseModel):
+    seeded: bool
+    password: str | None = None
+    roles: list[str] = []
 
 
 @router.post("/login", response_model=LoginOut)
@@ -54,6 +63,16 @@ def me(ctx: dict = Depends(current_user)):
     return ctx
 
 
+@router.get("/seed-info", response_model=SeedInfoOut)
+@trace_call("api.auth.seed_info")
+def seed_info():
+    """演示环境：向登录页提供已播种账户与密码；生产环境一律不返回密码。"""
+    if settings.env == "production":
+        return SeedInfoOut(seeded=False)
+    return SeedInfoOut(seeded=_seeded_password is not None,
+                       password=_seeded_password, roles=list(SEED_ROLES))
+
+
 @router.post("/seed")
 @trace_call("api.auth.seed_users")
 def seed_users():
@@ -62,9 +81,12 @@ def seed_users():
     生产环境（APP_ENV=production）不生效 —— 演示账户播种是弱口令安全风险，
     生产请用真实用户体系或手动初始化（见 doc/硬编码清单.md 整改⑥）。
     """
+    global _seeded_password
     if settings.env == "production":
+        _seeded_password = None
         return {"seeded": False, "reason": "APP_ENV=production 禁用演示账户自动播种"}
     pw = _seed_password()
+    _seeded_password = pw
     with session() as conn:
         conn.execute("INSERT OR IGNORE INTO tenants (id, name) VALUES (1, '默认租户')")
         for role in SEED_ROLES:

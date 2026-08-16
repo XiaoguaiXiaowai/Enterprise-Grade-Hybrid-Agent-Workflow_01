@@ -24,19 +24,31 @@ def get_ticket(ticket_id):
 
 
 def list_tickets(tenant_id, limit=50, requester_id=None):
-    """列出工单。requester_id 非空时仅返回该用户创建/归属的个人工单。"""
+    """列出工单。requester_id 非空时仅返回该用户创建/归属的个人工单。
+    联表带出创建人用户名（requester_name），供 operator/admin 全量视图区分归属。"""
     with session() as conn:
+        sql = ("SELECT t.*, u.username AS requester_name FROM tickets t "
+               "LEFT JOIN users u ON u.id = t.requester_id WHERE t.tenant_id = ?")
+        params: list = [tenant_id]
         if requester_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM tickets WHERE tenant_id = ? AND requester_id = ? ORDER BY id DESC LIMIT ?",
-                (tenant_id, requester_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM tickets WHERE tenant_id = ? ORDER BY id DESC LIMIT ?",
-                (tenant_id, limit),
-            ).fetchall()
+            sql += " AND t.requester_id = ?"
+            params.append(requester_id)
+        sql += " ORDER BY t.id DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+
+def delete_ticket(ticket_id) -> bool:
+    """删除工单及其全部关联数据（事件/工具调用/审批/追踪/指标）。返回工单是否存在。"""
+    with session() as conn:
+        row = conn.execute("SELECT id FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+        if row is None:
+            return False
+        for table in ("ticket_events", "tool_calls", "approvals", "traces", "metrics"):
+            conn.execute(f"DELETE FROM {table} WHERE ticket_id = ?", (ticket_id,))
+        conn.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
+        return True
 
 
 def _touch(conn, ticket_id):

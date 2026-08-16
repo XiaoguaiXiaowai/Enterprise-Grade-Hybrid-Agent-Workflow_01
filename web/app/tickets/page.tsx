@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Nav from "@/components/Nav";
-import { createTicket, getConversation, getTicket, listTickets, runTicket, sendMessage, confirmTicket, subscribeTicketWS } from "@/lib/api";
+import { createTicket, deleteTicket, getConversation, getTicket, getUser, listTickets, runTicket, sendMessage, confirmTicket, subscribeTicketWS } from "@/lib/api";
 
 type Msg = {
   role: "user" | "assistant" | "system";
@@ -136,6 +136,11 @@ export default function Tickets() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const stopStreamRef = useRef<(() => void) | null>(null);
+
+  // 当前用户角色（登录时写入 localStorage）：admin 可删除工单；operator/admin 列表含全部工单
+  const role = getUser()?.role ?? null;
+  const isAdmin = role === "admin";
+  const isOps = role === "operator" || role === "admin";
 
   const refresh = useCallback(async () => {
     try { setTickets(await listTickets()); } catch { /* */ }
@@ -296,6 +301,21 @@ export default function Tickets() {
     finally { setBusy(false); }
   }
 
+  // 管理员删除工单（级联清除全部关联数据）
+  async function doDelete(id: number) {
+    const t = tickets.find((x) => x.id === id);
+    if (!confirm(`确认删除工单 #${id}「${t?.title || ""}」？删除后不可恢复，将同时清除其对话、审批与执行记录。`)) return;
+    setMsg(""); setBusy(true);
+    try {
+      await deleteTicket(id);
+      setMsg(`已删除工单 #${id}`);
+      stopLive();
+      setActive(null); setActiveTicket(null); setMsgs([]);
+      await refresh();
+    } catch (ex: any) { setMsg(ex.message); }
+    finally { setBusy(false); }
+  }
+
   const status = activeTicket?.status;
   const canChat = active !== null && (status === "pending_confirm" || status === "failed") && !busy;
 
@@ -362,7 +382,16 @@ export default function Tickets() {
                 <div className="tc-meta">
                   <span className={`badge ${statusClass(t.status)}`}>{STATUS_LABEL[t.status] || t.status}</span>
                   <span className="muted">{INTENT_LABEL[t.intent_type] || t.intent_type} · {fmtTime(t.updated_at || t.created_at)}</span>
+                  {isOps && <span className="muted">· {t.requester_name || `用户#${t.requester_id}`}</span>}
                 </div>
+                {isAdmin && (
+                  <button
+                    className="err"
+                    style={{ position: "absolute", top: 10, right: 10, padding: "2px 10px", fontSize: 12 }}
+                    onClick={(e) => { e.stopPropagation(); doDelete(t.id); }}
+                    title="删除工单（仅管理员）"
+                  >删除</button>
+                )}
               </div>
             ))}
             {filtered.length === 0 && <p className="muted" style={{ margin: "8px 0", textAlign: "center" }}>暂无匹配工单。</p>}

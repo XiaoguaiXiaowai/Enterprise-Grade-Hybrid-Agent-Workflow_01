@@ -43,6 +43,7 @@ class TicketOut(BaseModel):
     id: int
     tenant_id: int
     requester_id: int
+    requester_name: str | None = None
     title: str
     description: str
     risk_level: str
@@ -56,6 +57,17 @@ class TicketOut(BaseModel):
 def _serialize(row) -> dict:
     d = dict(row)
     return TicketOut(**d).model_dump()
+
+
+def _ensure_access(row, ctx: dict) -> None:
+    """租户隔离 + 角色可见范围：
+    - 租户不符 → 403
+    - employee 仅可访问自己创建/归属的工单；operator/admin 可访问租户内全部工单
+    """
+    if row["tenant_id"] != ctx["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权访问")
+    if ctx["role"] == "employee" and row["requester_id"] != ctx["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问")
 
 
 @router.post("", response_model=TicketOut)
@@ -98,8 +110,21 @@ def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
 @router.get("")
 @trace_call("api.tickets.list_tickets")
 def list_tickets(ctx: dict = Depends(current_user)):
-    # 工单列表仅展示当前登录用户创建/归属的个人工单
-    return daos.list_tickets(ctx["tenant_id"], requester_id=ctx["user_id"])
+    # 可见范围：employee 仅自己的工单；operator/admin 显示租户内全部工单
+    if ctx["role"] == "employee":
+        return daos.list_tickets(ctx["tenant_id"], requester_id=ctx["user_id"])
+    return daos.list_tickets(ctx["tenant_id"])
+
+
+@router.delete("/{ticket_id}")
+@trace_call("api.tickets.delete_ticket")
+def delete_ticket(ticket_id: int, ctx: dict = Depends(require_role("admin"))):
+    """删除工单（仅 admin）：级联清除事件/审批/工具调用/追踪/指标等关联数据。"""
+    if not daos.delete_ticket(ticket_id):
+        raise HTTPException(status_code=404, detail="工单不存在")
+    if enabled():
+        log("info", "delete_ticket", f"admin {ctx['username']} deleted ticket {ticket_id}")
+    return {"deleted": True, "id": ticket_id}
 
 
 @router.get("/all")
@@ -115,8 +140,7 @@ def get_ticket(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
         raise HTTPException(status_code=404, detail="工单不存在")
-    if row["tenant_id"] != ctx["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权访问")
+    _ensure_access(row, ctx)
     return _serialize(row)
 
 
@@ -126,8 +150,7 @@ def run(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
         raise HTTPException(status_code=404, detail="工单不存在")
-    if row["tenant_id"] != ctx["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权访问")
+    _ensure_access(row, ctx)
     result = run_ticket(ticket_id, actor=ctx["username"])
     return result
 
@@ -168,8 +191,7 @@ def followup(ticket_id: int, body: FollowupIn, ctx: dict = Depends(current_user)
         row = daos.get_ticket(ticket_id)
         if row is None:
             raise HTTPException(status_code=404, detail="工单不存在")
-        if row["tenant_id"] != ctx["tenant_id"]:
-            raise HTTPException(status_code=403, detail="无权访问")
+        _ensure_access(row, ctx)
 
         status = row["status"]
         if status == "archived":
@@ -214,8 +236,7 @@ def confirm(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
         raise HTTPException(status_code=404, detail="工单不存在")
-    if row["tenant_id"] != ctx["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权访问")
+    _ensure_access(row, ctx)
     if row["status"] != "pending_confirm":
         raise HTTPException(status_code=409, detail="仅『待确认完成』状态的工单可以确认完成")
     daos.transition(ticket_id, "done", ctx["username"], reason="客户确认完成")
@@ -230,8 +251,7 @@ def close(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
         raise HTTPException(status_code=404, detail="工单不存在")
-    if row["tenant_id"] != ctx["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权访问")
+    _ensure_access(row, ctx)
     if row["status"] != "done":
         raise HTTPException(status_code=409, detail="仅『已完成』状态的工单可以关闭")
     daos.transition(ticket_id, "archived", ctx["username"], reason="用户确认关闭")
@@ -246,8 +266,7 @@ def conversation(ticket_id: int, ctx: dict = Depends(current_user)):
     row = daos.get_ticket(ticket_id)
     if row is None:
         raise HTTPException(status_code=404, detail="工单不存在")
-    if row["tenant_id"] != ctx["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权访问")
+    _ensure_access(row, ctx)
     return [dict(e) for e in daos.list_events(ticket_id)]
 
 
@@ -261,6 +280,8 @@ def events(ticket_id: int, token: str | None = None):
     row = daos.get_ticket(ticket_id)
     if row is None or row["tenant_id"] != ctx["tenant_id"]:
         raise HTTPException(status_code=404, detail="工单不存在")
+    if ctx["role"] == "employee" and row["requester_id"] != ctx["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问")
     # 实时流式推送：先返回已存在事件，再长轮询等待新事件附加到 SSE。
     cur = daos.list_events(ticket_id)
     cursor = cur[-1]["id"] if cur else 0
@@ -300,6 +321,9 @@ async def ws_events(websocket: WebSocket, ticket_id: int, token: str | None = No
     row = daos.get_ticket(ticket_id)
     if row is None or row["tenant_id"] != ctx["tenant_id"]:
         await websocket.close(code=4404)
+        return
+    if ctx["role"] == "employee" and row["requester_id"] != ctx["user_id"]:
+        await websocket.close(code=4403)
         return
     await websocket.accept()
     cursor = 0

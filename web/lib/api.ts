@@ -8,8 +8,17 @@ export function getToken(): string | null {
 export function setToken(t: string) {
   window.localStorage.setItem("token", t);
 }
+// 当前登录用户信息（含 role），登录成功后写入；供导航/页面按角色渲染
+export function setUser(u: any) {
+  window.localStorage.setItem("user", JSON.stringify(u));
+}
+export function getUser(): any | null {
+  if (typeof window === "undefined") return null;
+  try { return JSON.parse(window.localStorage.getItem("user") || "null"); } catch { return null; }
+}
 export function clearToken() {
   window.localStorage.removeItem("token");
+  window.localStorage.removeItem("user");
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -35,12 +44,39 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function login(username: string, password: string) {
-  const data = await req<{ token: string; user: any }>("/api/auth/login", {
+  // 注意：登录失败的后端响应是 401，但那是"凭据错误"语义，绝不能走通用 req() 的
+  // 401 处理（清 token + 跳转 /login + 抛"未登录"），否则错误提示会被吞掉。
+  const res = await fetch(`${API}/api/auth/login`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
+  if (!res.ok) {
+    // 解析 FastAPI 错误体 {"detail": "..."}（422 时 detail 为校验错误数组）
+    const text = await res.text().catch(() => "");
+    let detail = res.statusText;
+    try {
+      const d = JSON.parse(text)?.detail;
+      if (typeof d === "string") detail = d;
+      else if (Array.isArray(d) && d[0]?.msg) detail = d[0].msg;
+    } catch { /* 保留 fallback */ }
+    throw new Error(detail || `登录失败（HTTP ${res.status}）`);
+  }
+  const data = await res.json();
   setToken(data.token);
+  setUser(data.user);
   return data.user;
+}
+
+// 演示播种信息（尽力而为，失败返回 null 静默降级）：仅非生产环境返回密码
+export async function seedInfo(): Promise<{ seeded: boolean; password?: string | null; roles?: string[] } | null> {
+  try {
+    const res = await fetch(`${API}/api/auth/seed-info`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 export function me() {
@@ -58,6 +94,9 @@ export function listAllTickets() {
 }
 export function getTicket(id: number) {
   return req<any>(`/api/tickets/${id}`);
+}
+export function deleteTicket(id: number) {
+  return req<any>(`/api/tickets/${id}`, { method: "DELETE" });
 }
 export function getConversation(id: number) {
   return req<any[]>(`/api/tickets/${id}/conversation`);
