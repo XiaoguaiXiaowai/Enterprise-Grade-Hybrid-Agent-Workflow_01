@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
+import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,7 +113,7 @@ class McpRegistry:
                 return str(pp) if pp.is_absolute() else str(BASE_DIR / pp)
             return MCPServerStdio(
                 MCPServerStdioParams(
-                    command=_to_abs(cfg.command), args=[_to_abs(a) for a in cfg.args],
+                    command=_resolve_runner(cfg.command), args=[_to_abs(a) for a in cfg.args],
                     cwd=_to_abs(cfg.cwd), env=cfg.env or None,
                 ),
                 **common,
@@ -152,6 +155,10 @@ class McpRegistry:
             except Exception as e:  # noqa: BLE001 —— 连接失败绝不向上抛
                 log_exception()
                 last_err = f"{type(e).__name__}: {e}"
+                # ExceptionGroup 只显示外层，展开内层才有真因（如 stdio 子进程初始化失败）
+                detail = " | ".join(_walk_exceptions(e))
+                if detail != last_err:
+                    last_err = f"{last_err} [{detail}]"
                 log("info", "mcp.servers._connect", f"{cfg.name} attempt={attempt} e={last_err}")
         # 全部失败：清理残留 server（防子进程泄漏）
         if conn.server is not None:
@@ -311,3 +318,48 @@ def _parse_call_tool_result(res, tool_name: str) -> dict:
 
 
 registry = McpRegistry()
+
+
+def _walk_exceptions(exc: BaseException) -> list[str]:
+    """递归展开异常（含 ExceptionGroup 内层），返回「类型: 消息」列表用于日志定位真因。"""
+    from io import StringIO
+    import traceback as _tb
+
+    def _fmt(e: BaseException, depth: int) -> list[str]:
+        out = [f"{type(e).__name__}: {e}"]
+        if isinstance(e, BaseExceptionGroup):
+            for se in e.exceptions:
+                out.extend(_fmt(se, depth + 1))
+        return out
+
+    try:
+        return _fmt(exc, 0)
+    except Exception:  # noqa: BLE001 —— 日志工具本身永不抛
+        buf = StringIO()
+        _tb.print_exception(exc, file=buf)
+        return [buf.getvalue()[:2000]]
+
+
+def _resolve_runner(command: str) -> str:
+    """把 stdio `command` 解析为实际可执行路径，兼容本机 / Docker 双环境。
+
+    设计（R5 外挂优先 + 防诡路径）：
+    - 绝对路径且存在 → 用之
+    - 相对路径（BASE_DIR 内）且存在 → 用之（如本机的 `.venv/bin/python`）
+    - 解析失败时若 basename 形如 python* → 回退**当前解释器** sys.executable
+      （示例 server 都是纯 Python + mcp 包，容器里 mcp 装在与主进程同一解释器，
+       无需依赖一定存在的 .venv）
+    - 否则尝试 PATH 中查找；都不存在才返回原样，由 _connect 的异常兜底上报。
+    """
+    p = Path(command)
+    if p.is_absolute():
+        if os.path.exists(command):
+            return command
+    else:
+        joined = BASE_DIR / p
+        if joined.exists():
+            return str(joined)
+    if "python" in p.name.lower():
+        return sys.executable
+    found = shutil.which(command)
+    return found or str(BASE_DIR / p)
