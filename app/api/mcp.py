@@ -59,6 +59,23 @@ def connect(name: str, ctx: dict = Depends(require_role("operator", "admin"))):
     return {"name": name, "healthy": True, "tools": sorted(conn.tools)}
 
 
+@router.post("/servers/{name}/refresh")
+@trace_call("api.mcp.servers_refresh")
+def refresh(name: str, ctx: dict = Depends(require_role("operator", "admin"))):
+    """工具清单/配置热刷新（P2）：重建连接并重新 list_tools。
+
+    场景：server 新增/下线了工具，或 mcp_servers.json 改了映射表——无需重启，
+    调用本端点即可让该 server 的可用工具集与配置保持最新（缓存 cache_tools_list 重建）。
+    """
+    try:
+        conn = mcp_servers.registry.get_connection(name, refresh=True)
+    except mcp_servers.McpUnavailable as e:
+        log_exception()
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"name": name, "healthy": conn.healthy, "error": conn.error,
+            "tools": sorted(conn.tools)}
+
+
 @router.post("/servers/{name}/disconnect")
 @trace_call("api.mcp.servers_disconnect")
 def disconnect(name: str, ctx: dict = Depends(require_role("operator", "admin"))):

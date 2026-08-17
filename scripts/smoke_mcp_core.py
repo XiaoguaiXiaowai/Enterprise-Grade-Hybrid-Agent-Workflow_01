@@ -80,6 +80,22 @@ def main():
     unk = {t.name for t in build_mcp_tools("operator", ["cmdb__drop_database"])}
     _assert(unk == set(), "M7 未映射工具拒绝装配（白名单生效）")
 
+    # ---- 2.5) 降级链路 proxy（P1：传统 LLMGateway 循环用 MCP）----
+    from app.mcp.bridge import ensure_proxies_registered
+    from app.skills import registry
+    ensure_proxies_registered()
+    _assert(registry.get_tool("cmdb__query_asset") is not None
+            and registry.get_tool("cmdb__list_network_devices") is not None,
+            "M7b 降级链路 proxy 注册只读工具")
+    _assert(registry.get_tool("cmdb__update_asset_owner") is None,
+            "M7c 高风险写操作不注册（降级链路强制走 SDK 审批语义）")
+    _rp = registry.invoke("cmdb__query_asset", {"hostname": "db-01"}, ctx={})
+    _assert(_rp["ok"] and "*" in str(_rp["result"]["asset"]["owner"]),
+            f"M7d 降级 proxy 调用成功且脱敏: {_rp['result']}")
+    _rpb = registry.invoke("cmdb__query_asset", {}, ctx={})
+    _assert(_rpb["ok"] and "参数校验失败" in str(_rpb["result"].get("error", "")),
+            f"M7e 降级 proxy 参数校验生效: {_rpb['result']}")
+
     # ---- 3) 连接 + 工具清单（真实 MCP stdio 子进程）----
     conn = mcp_servers.registry.get_connection("cmdb")
     _assert(conn.healthy, f"M8 连接成功（error={conn.error[:100] if conn.error else ''}）")

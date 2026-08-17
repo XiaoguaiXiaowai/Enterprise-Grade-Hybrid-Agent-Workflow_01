@@ -31,6 +31,7 @@ export default function Nav() {
       {isOps && <Link href="/approve">审批台</Link>}
       {isOps && <Link href="/metrics">指标</Link>}
       {isOps && <Link href="/kb">知识库</Link>}
+      {isOps && <Link href="/mcp">MCP 工具面</Link>}
       <span className="muted" style={{ marginLeft: "auto", fontSize: 13 }}>
         {user?.username && <>👤 {user.username}（{ROLE_LABEL[role || ""] || role}）</>}
       </span>

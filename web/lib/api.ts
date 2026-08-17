@@ -132,6 +132,23 @@ export function getMetrics() {
   return req<any>("/api/metrics");
 }
 
+// MCP 工具面（M5-P2）：外部工具server状态 / 工具映射表 / 连接控制 / 热刷新
+export function listMcpServers() {
+  return req<any[]>("/api/mcp/servers");
+}
+export function getMcpServerTools(name: string) {
+  return req<any>(`/api/mcp/servers/${name}/tools`);
+}
+export function mcpConnect(name: string) {
+  return req<any>(`/api/mcp/servers/${name}/connect`, { method: "POST" });
+}
+export function mcpDisconnect(name: string) {
+  return req<any>(`/api/mcp/servers/${name}/disconnect`, { method: "POST" });
+}
+export function mcpRefresh(name: string) {
+  return req<any>(`/api/mcp/servers/${name}/refresh`, { method: "POST" });
+}
+
 // 工单执行 Trace 回放（治理层审计：模型/工具调用/状态变迁全链路）
 export function getTraces(ticketId: number) {
   return req<any[]>(`/api/traces/${ticketId}`);

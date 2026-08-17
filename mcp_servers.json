@@ -14,17 +14,68 @@
         "query_asset": {
           "risk": "low",
           "roles": ["employee", "operator", "admin"],
-          "description": "查询 CMDB 服务器资产信息（只读）"
+          "description": "查询 CMDB 服务器资产信息（只读）",
+          "param_schema": {
+            "type": "object",
+            "required": ["hostname"],
+            "additionalProperties": false,
+            "properties": {
+              "hostname": {"type": "string"}
+            }
+          }
         },
         "list_network_devices": {
           "risk": "low",
           "roles": ["employee", "operator", "admin"],
-          "description": "列出 CMDB 网络设备（只读，可按机架过滤）"
+          "description": "列出 CMDB 网络设备（只读，可按机架过滤）",
+          "param_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "rack": {"type": "string"}
+            }
+          }
         },
         "update_asset_owner": {
           "risk": "high",
           "roles": ["operator", "admin"],
-          "description": "变更 CMDB 服务器资产负责人（写操作，高风险需审批）"
+          "description": "变更 CMDB 服务器资产负责人（写操作，高风险需审批）",
+          "param_schema": {
+            "type": "object",
+            "required": ["hostname", "new_owner", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "hostname": {"type": "string"},
+              "new_owner": {"type": "string"},
+              "reason": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "metrics",
+      "transport": "streamable_http",
+      "url": "http://127.0.0.1:${METRICS_PORT}/mcp",
+      "headers": {"Authorization": "Bearer ${METRICS_MCP_TOKEN}"},
+      "client_timeout_seconds": 5,
+      "call_timeout_seconds": 15,
+      "tools": {
+        "list_nodes": {
+          "risk": "low",
+          "roles": ["employee", "operator", "admin"],
+          "description": "列出集群节点及健康状态（只读，远程 HTTP server）"
+        },
+        "get_node_load": {
+          "risk": "low",
+          "roles": ["employee", "operator", "admin"],
+          "description": "查询指定节点的 CPU/内存负载（只读，远程 HTTP server）",
+          "param_schema": {
+            "type": "object",
+            "required": ["node"],
+            "additionalProperties": false,
+            "properties": {"node": {"type": "string"}}
+          }
         }
       }
     }

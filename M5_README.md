@@ -1,4 +1,4 @@
-# M5 —— MCP 集成（P0 完成）
+# M5 —— MCP 集成（P0 / P1 / P2 完成）
 
 在 M4 基础上，把**外部工具/数据源的标准接入（MCP）**引入工具面：MCP server 的工具
 不会直接挂给模型，必须过映射表白名单并享受与本地工具完全一致的治理链路。
@@ -25,28 +25,53 @@
    TriageAgent 新增一个 handoff；现有 4 个 Agent 不动。
 5. **管理 API**（`app/api/mcp.py`）：`GET /api/mcp/servers`（状态/工具清单）、
    `GET /api/mcp/servers/{name}/tools`（映射后 risk/roles）、
-   `POST .../connect|disconnect`（故障演练）。
+   `POST .../connect|disconnect`（故障演练）、`POST .../refresh`（工具清单热刷新）。
+
+**P1 —— 治理完善**
+6. **参数校验**（`app/mcp/validate.py` + 映射表 `param_schema`）：调用前按 JSON Schema
+   子集（type / required / properties / enum / additionalProperties=false）校验，非法参数
+   拒绝执行并落审计；SDK 链路与降级链路同套校验器。
+7. **降级链路贯通（R4）**（`bridge.ensure_proxies_registered` + `orchestrator` 接线）：
+   把只读/低风险 MCP 工具注册进 `skills.registry`，传统 LLMGateway 循环（`_plan_and_execute`）
+   也能消费 MCP 工具，治理由 `_execute_tool` 统一承担。**高风险写操作不注册**——强制走
+   SDK 原生审批，保持 HITL 语义单一。`_normalize_tool_params` 对 `**kwargs` 代理工具放行透传。
+
+**P2 —— 生态增强**
+8. **远程 server + 鉴权**（`scripts/mcp_servers/metrics_server.py`）：`streamable_http`
+   传输的独立 HTTP server，带 **Bearer 鉴权**（mcp 2.x 的 TransSec 只防 DNS/CSR，业务
+   鉴权由一层 ASGI 中间件承担）；客户端 `${ENV}` 注入 Authorization 头。
+9. **热刷新**：`POST /api/mcp/servers/{name}/refresh` 重建连接并重拉工具清单（含重新读配置）。
+10. **前端「MCP 工具面」**（`web/app/mcp/page.tsx`）：一屏展示各 server 状态 / transport /
+   已发现工具 / 映射后的 risk·roles·param_schema·描述，支持 连接 / 断开（故障演练）／
+   刷新。`web/lib/api.ts` + Nav 已接入。
 
 ## 新增 / 变更文件
 
 ```
 app/mcp/__init__.py            # MCP 包
-app/mcp/config.py              # 配置加载/校验 + 工具映射白名单          [新增]
-app/mcp/servers.py             # 连接生命周期（懒连接/事件循环/重连）    [新增]
-app/mcp/bridge.py              # 治理桥接 + FunctionTool 装配           [新增]
-app/api/mcp.py                 # /api/mcp 管理端点                     [新增]
-app/agents_defs.py             # + CmdbAgent + handoff                [改]
-app/agents_tools.py            # + build_mcp_tools(role, names) 转发   [改]
-app/prompts/agents.py          # + SYSTEM_CMDB；TRIAGE/CHANGE 增补     [改]
-app/config.py                  # + MCP_ENABLED 等配置                  [改]
-app/guards.py                  # 修复 is_duplicate 时间窗比较（格式+时区）[改]
-app/main.py                    # 挂载 /api/mcp + 关闭时 disconnect_all [改]
-scripts/mcp_servers/cmdb_server.py  # 示例 stdio MCP Server（CMDB）    [新增]
-scripts/smoke_mcp_core.py      # 确定性冒烟（21 断言，必过）            [新增]
-scripts/smoke_mcp.py           # 真模型端到端冒烟（best-effort）        [新增]
-mcp_servers.json               # 示例配置                              [新增]
-requirements.txt               # + mcp==2.0.0                         [改]
-.env.example                   # + MCP_ENABLED 等                      [改]
+app/mcp/config.py              # 配置加载/校验 + 工具映射白名单 + param_schema  [新增]
+app/mcp/validate.py            # 轻量 JSON Schema 参数校验器（P1）              [新增]
+app/mcp/servers.py             # 连接生命周期（懒连接/事件循环/重连/超时重试）  [新增]
+app/mcp/bridge.py              # 治理桥接 + FunctionTool + param_schema 校验
+                               #   + register_mcp_proxies（降级链路，P1）      [新增]
+app/api/mcp.py                 # /api/mcp 管理端点（+ refresh 热刷新，P2）      [新增]
+app/agents_defs.py             # + CmdbAgent + handoff                        [改]
+app/agents_tools.py            # + build_mcp_tools(role, names) 转发           [改]
+app/orchestrator.py            # 降级链路接入 ensure_proxies_registered（P1）  [改]
+app/prompts/agents.py          # + SYSTEM_CMDB；TRIAGE/CHANGE 增补             [改]
+app/config.py                  # + MCP_ENABLED 等配置                         [改]
+app/guards.py                  # 修复 is_duplicate 时间窗比较（格式+时区）      [改]
+app/main.py                    # 挂载 /api/mcp + 关闭时 disconnect_all        [改]
+scripts/mcp_servers/cmdb_server.py      # 示例 stdio MCP Server（CMDB）       [新增]
+scripts/mcp_servers/metrics_server.py   # 示例 streamable_http MCP Server（P2）[新增]
+scripts/smoke_mcp_core.py      # 确定性冒烟（22 断言，必过）                    [新增]
+scripts/smoke_mcp_http.py      # 远程 http + Bearer 冒烟（8 断言，P2）          [新增]
+scripts/smoke_mcp.py           # 真模型端到端冒烟（best-effort）                [新增]
+mcp_servers.json               # 示例配置（cmdb stdio + metrics http）          [新增]
+web/app/mcp/page.tsx           # 前端「MCP 工具面」页面（P2）                   [新增]
+web/lib/api.ts / components/Nav.tsx  # 前端接入 MCP API + 导航                 [改]
+requirements.txt               # + mcp==2.0.0                                 [改]
+.env.example                   # + MCP_ENABLED / METRICS_* 等                  [改]
 ```
 
 ## 依赖与配置
@@ -67,9 +92,15 @@ pip install -r requirements.txt    # 含 mcp==2.0.0（mcp 2.x，openai-agents 0.
 . .venv/bin/activate
 # ① 确定性冒烟（推荐，必过）：不依赖真模型，覆盖连接/白名单/治理/审计/脱敏/重连
 python scripts/smoke_mcp_core.py
-# ② 真模型端到端（可选）：需可访问 openrouter.ai；真模型有随机性，高风险场景可能需重试
+# ② 远程 streamable_http + Bearer 鉴权冒烟（P2）：自起 metrics server 验证远程链路
+python scripts/smoke_mcp_http.py
+# ③ 真模型端到端（可选）：需可访问 openrouter.ai；真模型有随机性，高风险场景可能需重试
 python scripts/smoke_mcp.py
 ```
+
+> ② 会自动在本机拉起 `metrics_server.py`（streamable_http + Bearer）并做鉴权/调用/刷新断言，
+> 无需手工启动。若要在真实服务里体验远程链路，可先 `METRICS_PORT=8766 METRICS_MCP_TOKEN=xxx \
+> .venv/bin/python scripts/mcp_servers/metrics_server.py` 再经由「MCP 工具面」页面连接。
 
 冒烟断言（core，22 项）：
 1. 装配白名单：employee 只装只读 `cmdb__query_asset`；operator 全有；未映射/角色不符拒绝
@@ -97,13 +128,17 @@ python scripts/smoke_mcp.py
 > 后 fallback 到不可达的远程 Ollama 而卡约 120s——冒烟脚本已注入可用模型并关闭
 > 重写/相关性校验（测试目标在 MCP 链路）。
 
-## 已知边界 / 演进点（P1/P2）
+## P1/P2 完成情况与剩余边界
 
-- **降级链路**：传统 LLMGateway 循环暂不接 MCP 工具（`register_mcp_proxies` 列 P1）；
-  当前 MCP 工具只在 SDK 主链路可用。
-- **参数校验**：映射表 `param_schema`（JSON Schema 子集）字段已预留，P1 接线。
-- **远程 server**：`streamable_http` / `sse` 的配置与鉴权（`${ENV}` headers）已支持，
-  示例仍是 stdio；P2 补一个 HTTP 演示（如 github MCP server）。
-- **前端**：`/api/mcp/servers` 数据已就绪，P2 做「MCP 工具面」页面。
-- **工具清单热刷新**：配置变更需重启读取（`load_config()` 每次惰性加载，改 JSON 即生效；
-  server 工具清单缓存 `cache_tools_list=True`，需要 `refresh=True` 重连刷新）。
+已完成：
+- **P1**：参数校验（param_schema）、`register_mcp_proxies`（降级链路贯通 R4）、超时/重试/健康检查、
+  `/api/mcp` 端点、文档。
+- **P2**：`streamable_http` 远程 server + Bearer 鉴权演示、工具清单热刷新（refresh）、
+  前端「MCP 工具面」页面。
+
+仍可选深化（非阻塞）：
+- **OAuth**：当前以 Bearer 静态 token 演示鉴权；OAuth 2 授权码流留给真实远程 server（SSE/OAuth
+  由 SDK 原生支持，config 已可传 headers/token）。
+- **sse 传输**：配置层与 `servers.py` 已支持 `sse` 的 url + headers，示例未单列一个 sse server
+  （与 streamable_http 演示等价，视需要再加）。
+- **前端工具清单热刷新**已具备（refresh 按钮）；若要更高频自动同步可在页面轮询时透传 refresh。

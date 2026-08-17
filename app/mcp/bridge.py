@@ -29,6 +29,7 @@ from ..skills import masker
 from ..tracelog import log, log_exception
 from . import servers as mcp_servers
 from .config import load_config
+from .validate import validate_params
 
 try:
     from agents.tool import FunctionTool
@@ -98,6 +99,12 @@ def _invoke_mcp(ctx, conn_name: str, tool_name: str, params: dict[str, Any]) -> 
         _record_tool_error(ctx, full_name,
                            RuntimeError(f"MCP 工具不可用: {full_name} ({conn.error or '未连接'})"))
         return {"status": "error", "error": f"MCP 工具不可用: {full_name}"}
+
+    # 1.5) 参数校验（param_schema，映射表 P1 配置）
+    verrs = _check_params(conn_name, tool_name, params)
+    if verrs:
+        _record_tool_error(ctx, full_name, RuntimeError(f"参数校验失败: {'；'.join(verrs)}"))
+        return {"status": "error", "error": f"参数校验失败: {'；'.join(verrs)}"}
 
     # 2) 预算 / 去重（同 _run）
     try:
@@ -259,6 +266,80 @@ def _resolve_mapping(server_name: str, tool_name: str):
     if cfg is None:
         return None
     return cfg.tools.get(tool_name)
+
+
+def _check_params(server_name: str, tool_name: str, params: dict) -> list[str]:
+    """按映射表 param_schema 校验参数；返回错误列表（空 = 通过）。"""
+    mapping = _resolve_mapping(server_name, tool_name)
+    if mapping is None or not mapping.param_schema:
+        return []
+    return validate_params(mapping.param_schema, params)
+
+
+# ===================== 传统降级链路（R4）：register_mcp_proxies =====================
+#
+# SDK 主链路用 FunctionTool 直挂 Agent；传统 LLMGateway 循环（_plan_and_execute）
+# 按「工具名 → registry」执行，因此把已映射的 MCP 工具注册为 registry 代理工具，
+# 让降级链路也能用 MCP（行为一致，设计 §4.5）。
+#
+# 约束：
+# - 只注册 risk != "high" 的工具——高风险写操作强制走 SDK 链路的原生 HITL，
+#   文本降级链路不承担审批语义（R4 简化审批）。
+# - 降级链路里的工具执行由《_execute_tool》完成全部治理（预算/去重/落库/trace/HITL），
+#   此处 proxy fn 只需「参数校验 + 实际调用 + 脱敏」，治理不重复。
+
+
+def _invoke_mcp_proxy(server_name: str, tool_name: str, params: dict) -> dict:
+    """降级链路 proxy 执行体（registry.invoke 的 fn）。
+
+    与本地 registry 工具同约定：成功返回业务 dict（已脱敏），失败返回 {"ok": False, "error"}。
+    治理（预算/去重/落库/trace/HITL）由降级链路《_execute_tool》统一承担，此处不重复。
+    """
+    verrs = _check_params(server_name, tool_name, params)
+    if verrs:
+        return {"ok": False, "error": f"参数校验失败: {'；'.join(verrs)}"}
+    try:
+        conn = mcp_servers.registry.get_connection(server_name)
+    except mcp_servers.McpUnavailable as e:
+        return {"ok": False, "error": f"MCP: {e}"}
+    if not conn.healthy or tool_name not in conn.tools:
+        return {"ok": False, "error": f"MCP 工具不可用: {server_name}__{tool_name}"}
+    call = mcp_servers.registry.call_tool(conn, tool_name, params)
+    if not call.get("ok"):
+        return {"ok": False, "error": call.get("error")}
+    return _sanitize(call.get("data"))
+
+
+def ensure_proxies_registered() -> list[str]:
+    """把只读/低风险 MCP 工具注册为 registry 代理（降级链路可用）。
+
+    幂等：已注册的工具名跳过。返回本次新增的工具名列表。
+    需在 assemble 构造 tools_allowed 之前调用（orchestrator 传统链路入口）。
+    """
+    from ..skills import registry
+    if not settings.mcp_enabled or not _FT_OK:
+        return []
+    registered: list[str] = []
+    for server_name, cfg in load_config().items():
+        for tool_name, mapping in cfg.tools.items():
+            if mapping.risk == "high":
+                continue  # 高风险写操作：降级链路不承接（保持 SDK 原生审批语义）
+            full = f"{server_name}__{tool_name}"
+            if registry.get_tool(full) is not None:
+                continue
+            proxy = _make_proxy(server_name, tool_name)
+            registry.register_tool(name=full, risk=mapping.risk,
+                                   roles=mapping.roles,
+                                   description=mapping.description or f"MCP 工具 {full}")(proxy)
+            registered.append(full)
+    return registered
+
+
+def _make_proxy(server_name: str, tool_name: str):
+    """闭包构造 proxy fn，避免循环变量捕获。"""
+    def proxy(**params):
+        return _invoke_mcp_proxy(server_name, tool_name, params)
+    return proxy
 
 
 def list_mcp_tools_for_role(role: str) -> list[str]:

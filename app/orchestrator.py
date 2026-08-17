@@ -77,6 +77,10 @@ def _normalize_tool_params(tool: str, params: dict) -> dict:
     except Exception:  # noqa: BLE001
         log_exception()
         return params
+    # 变参工具（如 MCP 代理 proxy(**params)）：参数集合由 param_schema 约束，
+    # 无需按函数签名过滤/补缺，直接透传（M5-P1）
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return params
     names = set(sig.parameters)
     out: dict = {}
     for k, v in params.items():
@@ -235,6 +239,14 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
     budget = Budget.start_for(ticket)
     req_id = trace_mod.new_req_id()
 
+    tools_allowed = registry.tools_for_role(actor_role(actor))
+    # M5-P1：把只读/低风险 MCP 工具注册为降级链路（LLMGateway 循环）可用的 registry 代理，
+    # 使传统链路同样能消费 MCP 工具（SDK 链路用 FunctionTool，互不冲突）。
+    try:
+        from .mcp.bridge import ensure_proxies_registered
+        ensure_proxies_registered()
+    except Exception:  # noqa: BLE001 —— MCP 集成异常不影响主流程
+        log_exception()
     tools_allowed = registry.tools_for_role(actor_role(actor))
     history = _load_history(ticket_id)
     memo = _load_memo(ticket["tenant_id"])

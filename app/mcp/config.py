@@ -46,6 +46,7 @@ class ToolMapping:
     risk: str = "low"                                   # low | medium | high
     roles: tuple = ("employee", "operator", "admin")    # 允许装配进上下文的角色
     description: str = ""                               # 可覆盖 server 自带描述
+    param_schema: dict | None = None                    # 可选：JSON Schema 子集，调用前校验（P1）
 
 
 @dataclass
@@ -85,6 +86,7 @@ class ServerConfig:
                     "risk": mapping.risk,
                     "roles": list(mapping.roles),
                     "description": mapping.description or None,
+                    "param_schema": mapping.param_schema,
                 }
                 for name, mapping in self.tools.items()
             },
@@ -113,7 +115,34 @@ def _validate_mapping(name: str, raw: Any, server: str) -> ToolMapping:
         risk=risk,
         roles=roles,
         description=str(raw.get("description", "")),
+        param_schema=_validate_param_schema(raw.get("param_schema"), server, name),
     )
+
+
+def _validate_param_schema(schema: Any, server: str, tool: str) -> dict | None:
+    """校验工具级 param_schema（JSON Schema 子集：type/required/properties/enum）。
+
+    非法即抛 McpConfigError（配置即白名单，坏 schema 拒绝装载而非静默放行）。
+    """
+    if schema is None:
+        return None
+    if not isinstance(schema, dict) or schema.get("type") not in ("object", None):
+        raise McpConfigError(f"[{server}] 工具 '{tool}' param_schema.type 必须是 'object'")
+    props = schema.get("properties") or {}
+    if not isinstance(props, dict):
+        raise McpConfigError(f"[{server}] 工具 '{tool}' param_schema.properties 必须是对象")
+    required = schema.get("required") or []
+    if not isinstance(required, list) or not all(isinstance(r, str) for r in required):
+        raise McpConfigError(f"[{server}] 工具 '{tool}' param_schema.required 必须是字符串数组")
+    allowed_types = {"string", "number", "integer", "boolean", "array", "object", "null"}
+    for pname, psch in props.items():
+        if not isinstance(psch, dict):
+            raise McpConfigError(f"[{server}] 工具 '{tool}' 属性 '{pname}' 描述非法")
+        if "type" in psch and psch["type"] not in allowed_types:
+            raise McpConfigError(
+                f"[{server}] 工具 '{tool}' 属性 '{pname}' type 非法: {psch['type']}")
+    return {"type": "object", "properties": props, "required": required,
+            "additionalProperties": schema.get("additionalProperties", False)}
 
 
 def _validate_server(raw: dict[str, Any]) -> ServerConfig:
