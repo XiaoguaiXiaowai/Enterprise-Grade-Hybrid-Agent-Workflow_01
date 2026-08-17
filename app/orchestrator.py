@@ -172,6 +172,71 @@ def run_ticket(ticket_id: int, actor: str = "system"):
     return _run_loop(ticket_id, actor)
 
 
+_INTENT_KINDS = {"knowledge", "data_query", "change", "troubleshoot"}
+_RISK_KINDS = {"low", "medium", "high"}
+
+
+def _entry_stages(ticket_id: int, actor: str) -> str | None:
+    """P0 快速落单首轮流水线（仅在 created 状态首次执行时调用）。
+
+    顺序：相关性校验 → 内容重写 → 意图/风险分类。每一步写一条 stage 事件
+    （state: running/ok/fail + label），供前端在聊天内流式展示处理进度。
+
+    相关性不通过：写拒绝文案（system_message）+ 置 cancelled，返回拒绝原因；
+    否则返回 None（后续由 _run_loop 继续正式 LOOP）。
+    """
+    from .classifier import relevance_check, rewrite_content, classify
+    ticket = daos.get_ticket(ticket_id)
+
+    # 1) 相关性校验
+    if _settings.input_relevance_check:
+        daos.add_event(ticket_id, "stage",
+                       {"stage": "relevance", "state": "running",
+                        "label": "校验内容与 IT 工单的相关性"}, actor)
+        rel = relevance_check(ticket["title"], ticket["description"])
+        log("info", "entry_stages", f"relevance={rel}")
+        if not rel["relevant"]:
+            reason = rel.get("reason") or "内容与工单不相关"
+            daos.add_event(ticket_id, "stage",
+                           {"stage": "relevance", "state": "fail", "label": reason}, actor)
+            daos.add_event(ticket_id, "system_message",
+                           {"content": f"您提交的内容与『企业 IT 工单』无关，已拒绝创建：{reason}"},
+                           "system")
+            daos.transition(ticket_id, "cancelled", actor, reason="相关性校验未通过")
+            return reason
+        daos.add_event(ticket_id, "stage",
+                       {"stage": "relevance", "state": "ok",
+                        "label": "内容与 IT 工单相关"}, actor)
+
+    # 2) 内容重写（开关可配）
+    rw = None
+    if _settings.prompt_rewrite:
+        daos.add_event(ticket_id, "stage",
+                       {"stage": "rewrite", "state": "running", "label": "归纳工单目标"}, actor)
+        rw = rewrite_content(ticket["title"], ticket["description"])
+        daos.add_event(ticket_id, "rewrite",
+                       {"summary": rw["summary"], "keywords": rw["keywords"],
+                        "source": rw["source"]}, actor)
+        daos.add_event(ticket_id, "stage",
+                       {"stage": "rewrite", "state": "ok",
+                        "label": "工单目标归纳完成"}, actor)
+
+    # 3) 意图/风险分类 → 回写工单元数据（分类决定后续路由模型选择）
+    daos.add_event(ticket_id, "stage",
+                   {"stage": "classify", "state": "running", "label": "意图与风险分级"}, actor)
+    cls = classify(ticket["title"], ticket["description"],
+                   rewritten=(rw or {}).get("summary") if _settings.prompt_rewrite else None)
+    risk = cls["risk_level"] if cls["risk_level"] in _RISK_KINDS else "low"
+    intent = cls["intent_type"] if cls["intent_type"] in _INTENT_KINDS else "knowledge"
+    if ticket["risk_level"] != risk or ticket["intent_type"] != intent:
+        log("info", "entry_stages", f"classify update: {ticket['risk_level']}/{risk} {ticket['intent_type']}/{intent}")
+        daos.update_ticket_meta(ticket_id, risk_level=risk, intent_type=intent)
+    daos.add_event(ticket_id, "stage",
+                   {"stage": "classify", "state": "ok",
+                    "label": f"分级完成（{intent} / {risk}）"}, actor)
+    return None
+
+
 def _finalize_round(ticket_id, ticket, budget, req_id, final_output=""):
     """回合收敛落账：预算用量/版本/结论回写工单 + 长期记忆写入（P0 整改）。
 
@@ -224,6 +289,14 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
     ticket = daos.get_ticket(ticket_id)
     if not ticket:
         raise KeyError(ticket_id)
+
+    # P0 快速落单首轮：created 状态下先跑 stage 流水线（相关性→重写→分类），
+    # 逐阶段发 stage 事件供前端聊天内流式展示；相关性不通过 → 已置 cancelled，终止。
+    if ticket["status"] == "created":
+        rejected = _entry_stages(ticket_id, actor)
+        if rejected:
+            return {"status": "rejected", "reason": rejected}
+        ticket = daos.get_ticket(ticket_id)  # 分类可能回写了 risk/intent
 
     # 状态机入口：created → triaged → gathering
     # 多轮对话：待确认完成（pending_confirm）/ 失败（failed）状态下用户追加提问 → 开新一轮
@@ -303,7 +376,6 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                 log_exception()
                 # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
                 _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
-                log("info", "orchestrator._run_loop", f"except  plan_and_execute")
             else:
                 log("info", "orchestrator._run_loop", "5")
                 log("info", "orchestrator._run_loop", f"except else status={sdk_result['status']}")
@@ -393,6 +465,9 @@ def _load_history(ticket_id) -> list[dict]:
             payload = {}
         # 计划类 model_call（tool() 指令文本）不进上下文，避免污染
         if e["event_type"] == "model_call" and payload.get("kind") == "plan":
+            continue
+        # 流程提示事件（stage：相关性/重写/分类进度）不进上下文，仅作前端展示
+        if e["event_type"] == "stage":
             continue
         if e["event_type"] in ("user_message", "system_message"):
             summary = payload.get("content") or ""

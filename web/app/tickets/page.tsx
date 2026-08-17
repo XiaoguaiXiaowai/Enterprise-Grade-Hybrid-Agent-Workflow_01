@@ -100,6 +100,16 @@ function eventToMsg(e: any): Msg[] {
       return [{ role: "system", type, text: "工单已取消", at }];
     case "confirmed":
       return [{ role: "system", type, text: "客户已确认完成，工单已完成", at }];
+    case "stage": {
+      // 快速落单首轮流程提示：相关性→重写→分类（实时流式展示）
+      const st = payload?.stage || "";
+      const state = payload?.state || "";
+      const label = payload?.label || "";
+      if (state === "running") return [{ role: "system", type, text: `⏳ ${label}…`, at }];
+      if (state === "fail") return [{ role: "system", type, text: `❌ ${label}`, at }];
+      if (state === "ok") return [{ role: "system", type, text: `✅ ${label}`, at }];
+      return [];
+    }
     default:
       // log / rewrite / reject_followup 等内部事件不展示
       return [];
@@ -259,7 +269,8 @@ export default function Tickets() {
         .catch((ex: any) => setMsg(ex.message))
         .finally(() => { stopLive(); setBusy(false); });
     } catch (ex: any) {
-      // 建单前的相关性校验失败（不相关）→ 在对话框内展示原因，不关闭弹窗、不建单
+      // 建单失败（字段校验等）→ 在对话框内展示原因，不关闭弹窗、不建单；
+      // （相关性校验已移至 run 阶段，在聊天内流式展示，不再走此分支）
       setFormErr(ex.message || "创建失败");
       setBusy(false);
     }
@@ -336,6 +347,10 @@ export default function Tickets() {
 
   const status = activeTicket?.status;
   const canChat = active !== null && (status === "pending_confirm" || status === "failed") && !busy;
+  // 大模型思考态：提交/运行请求进行中，或工单处于处理中集合
+  // （created=首轮流水线阶段 / triaged / gathering / agent_running / running）。
+  // 注意：切页后组件重挂载 busy 会重置，必须依赖工单状态判断，否则切回时思考态丢失。
+  const thinking = busy || status === "created" || status === "triaged" || status === "gathering" || status === "agent_running" || status === "running";
 
   const inputPlaceholder = (() => {
     if (!active) return "";
@@ -443,10 +458,10 @@ export default function Tickets() {
               <div className="chat-area" ref={chatRef}>
                 {msgs.map((m, i) => <MsgView key={i} m={m} />)}
                 {msgs.length === 0 && <p className="muted">该工单暂无对话记录。</p>}
-                {busy && (
+                {thinking && (
                   <div className="thinking-row">
                     <span className="thinking-dot" /><span className="thinking-dot" /><span className="thinking-dot" />
-                    <span className="thinking-text">大模型思考中</span>
+                    <span className="thinking-text">大模型思考中…</span>
                   </div>
                 )}
               </div>
@@ -511,7 +526,7 @@ export default function Tickets() {
               {formErr && <div style={{ color: "var(--err)", marginTop: 8 }}>{formErr}</div>}
               <div className="m-actions">
                 <button type="button" className="secondary" onClick={closeNew}>取消</button>
-                <button type="submit" disabled={busy}>{busy ? "校验中…" : "创建并运行"}</button>
+                <button type="submit" disabled={busy}>{busy ? "创建中…" : "创建并运行"}</button>
               </div>
             </form>
           </div>

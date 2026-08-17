@@ -12,7 +12,7 @@ from ..deps import current_user, require_role
 from ..security import resolve_token
 from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
-from ..classifier import classify, relevance_check, rewrite_content, followup_relevance_check
+from ..classifier import followup_relevance_check
 from ..config import settings as _settings
 from ..tracelog import trace_call, enabled, log, log_exception
 
@@ -73,37 +73,18 @@ def _ensure_access(row, ctx: dict) -> None:
 @router.post("", response_model=TicketOut)
 @trace_call("api.tickets.create_ticket")
 def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
-    # 建单入口顺序：相关性校验 → 内容重写 → 意图/风险分类
-    # 1) 相关性确认（开关可配，默认开）。不相关 → 拒绝建单并提示。
-    if _settings.input_relevance_check:
-        rel = relevance_check(body.title, body.description)
-        if enabled():
-            log("info", "create_ticket", f"relevance_check={rel}")
-        if not rel["relevant"]:
-            raise HTTPException(status_code=422, detail=rel["reason"])
-
-    # 2) 工单内容重写：先把原始内容总结归纳成简洁目标（供分类与后续执行复用）
-    rew = rewrite_content(body.title, body.description)
-    if enabled():
-        log("info", "create_ticket", f"rewrite_content={rew}")
-
-    # 3) 意图/风险自动分类：基于重写后的简洁内容判定（LLM，离线退化为规则）
-    cls = classify(body.title, body.description, rewritten=rew["summary"])
-    if enabled():
-        log("info", "create_ticket", f"classify={cls}")
-    risk = cls["risk_level"] if cls["risk_level"] in RISK_LEVELS else "low"
-    intent = cls["intent_type"] if cls["intent_type"] in INTENTS else "knowledge"
+    # P0 快速落单：不做同步 LLM 校验（相关性/重写/分类），立即建单返回 ticket_id，
+    # 由前端进入聊天页后触发 run，在聊天内实时流式展示各阶段（stage 事件）。
     tid = daos.create_ticket(
         tenant_id=ctx["tenant_id"], requester_id=ctx["user_id"],
         title=body.title, description=body.description,
-        risk_level=risk, intent_type=intent, priority=body.priority,
+        risk_level=body.risk_level if body.risk_level in RISK_LEVELS else "low",
+        intent_type=body.intent_type if body.intent_type in INTENTS else "knowledge",
+        priority=body.priority,
     )
     daos.add_event(tid, "created",
-                   {"title": body.title, "classified": cls}, ctx["username"])
-    # 持久化重写结果，执行阶段直接复用为目标，避免重复重写
-    daos.add_event(tid, "rewrite",
-                   {"summary": rew["summary"], "keywords": rew["keywords"],
-                    "source": rew["source"]}, ctx["username"])
+                   {"title": body.title,
+                    "note": "快速落单，校验/重写/分类在首轮执行阶段进行"}, ctx["username"])
     return _serialize(daos.get_ticket(tid))
 
 
@@ -122,8 +103,6 @@ def delete_ticket(ticket_id: int, ctx: dict = Depends(require_role("admin"))):
     """删除工单（仅 admin）：级联清除事件/审批/工具调用/追踪/指标等关联数据。"""
     if not daos.delete_ticket(ticket_id):
         raise HTTPException(status_code=404, detail="工单不存在")
-    if enabled():
-        log("info", "delete_ticket", f"admin {ctx['username']} deleted ticket {ticket_id}")
     return {"deleted": True, "id": ticket_id}
 
 
@@ -214,8 +193,6 @@ def followup(ticket_id: int, body: FollowupIn, ctx: dict = Depends(current_user)
             rel = followup_relevance_check(
                 row["title"], row["description"],
                 _recent_dialogue(ticket_id), body.content)
-            if enabled():
-                log("info", "followup", f"relevance_check={rel}")
             if not rel["relevant"]:
                 reason = rel.get("reason") or ""
                 msg = (f"您追加的内容与当前工单『{row['title']}』不相关，已拒绝处理。"

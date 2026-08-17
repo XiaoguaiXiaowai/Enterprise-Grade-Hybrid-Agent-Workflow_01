@@ -74,9 +74,8 @@ def classify(title: str = "", description: str = "", rewritten: str | None = Non
                 max_tokens=settings.llm_max_tokens_classify,
                 raise_if_reader=True,
             )
+            log("info", "classify", f"result={result}")
             data = _parse_json(result.content or "")
-            if enabled():
-                log("info", "classify", f"resp={result.content}")
             if data:
                 intent = data.get("intent_type")
                 risk = data.get("risk_level")
@@ -117,11 +116,9 @@ def relevance_check(title: str, description: str) -> dict:
                 max_tokens=settings.llm_max_tokens_classify,
                 raise_if_reader=True,
             )
+            log("info", "relevance_check", f"result={result}")
             data = _parse_json(result.content or "")
-            if enabled():
-                log("info", "relevance_check", f"result={result}")
             if data and isinstance(data.get("relevant"), bool):
-                log("info", "relevance_check", "LLM 判定")
                 return {"relevant": data["relevant"], "reason": data.get("reason", ""),
                         "source": "llm"}
         except Exception:
@@ -162,9 +159,8 @@ def followup_relevance_check(ticket_title: str, ticket_desc: str,
                 max_tokens=settings.llm_max_tokens_classify,
                 raise_if_reader=True,
             )
+            log("info", "followup_relevance_check", f"result={result}")
             data = _parse_json(result.content or "")
-            if enabled():
-                log("info", "followup_relevance_check", f"result={result.content}")
             if data and isinstance(data.get("relevant"), bool):
                 return {"relevant": data["relevant"],
                         "reason": data.get("reason", ""), "source": "llm"}
@@ -199,11 +195,9 @@ def rewrite_content(title: str, description: str) -> dict:
                 max_tokens=settings.llm_max_tokens_rewrite,
                 raise_if_reader=True,
             )
+            log("info", "rewrite_content", f"result={result}")
             data = _parse_json(result.content or "")
-            if enabled():
-                log("info", "rewrite_content", f"result={result}")
             if data and data.get("summary"):
-                log("info", "rewrite_content", "LLM 判定")
                 return {"summary": data["summary"],
                         "keywords": data.get("keywords", []), "source": "llm"}
         except Exception as e:

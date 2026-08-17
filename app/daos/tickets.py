@@ -39,6 +39,23 @@ def list_tickets(tenant_id, limit=50, requester_id=None):
         return [dict(r) for r in rows]
 
 
+def update_ticket_meta(ticket_id, risk_level=None, intent_type=None, priority=None):
+    """更新工单风险/意图/优先级（快速落单后由分类阶段回写）。"""
+    fields, params = [], []
+    if risk_level is not None:
+        fields.append("risk_level = ?"); params.append(risk_level)
+    if intent_type is not None:
+        fields.append("intent_type = ?"); params.append(intent_type)
+    if priority is not None:
+        fields.append("priority = ?"); params.append(priority)
+    if not fields:
+        return
+    params.append(ticket_id)
+    with session() as conn:
+        conn.execute(f"UPDATE tickets SET {', '.join(fields)} WHERE id = ?", params)
+        _touch(conn, ticket_id)
+
+
 def delete_ticket(ticket_id) -> bool:
     """删除工单及其全部关联数据（事件/工具调用/审批/追踪/指标）。返回工单是否存在。"""
     with session() as conn:
