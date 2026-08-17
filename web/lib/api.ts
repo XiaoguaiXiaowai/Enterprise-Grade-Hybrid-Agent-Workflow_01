@@ -89,6 +89,16 @@ export function createTicket(body: any) {
 export function listTickets() {
   return req<any[]>("/api/tickets");
 }
+// 需求②：分页列表。返回 {items, total, page, page_size, pages}
+export function listTicketsPaginated(params: { page?: number; page_size?: number; status?: string; q?: string } = {}) {
+  const sp = new URLSearchParams();
+  if (params.page) sp.set("page", String(params.page));
+  if (params.page_size) sp.set("page_size", String(params.page_size));
+  if (params.status) sp.set("status", params.status);
+  if (params.q) sp.set("q", params.q);
+  const qs = sp.toString();
+  return req<any>(`/api/tickets${qs ? `?${qs}` : ""}`);
+}
 export function listAllTickets() {
   return req<any[]>("/api/tickets/all");
 }

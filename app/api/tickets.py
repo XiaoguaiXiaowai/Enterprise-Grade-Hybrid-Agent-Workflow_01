@@ -90,11 +90,28 @@ def create_ticket(body: TicketIn, ctx: dict = Depends(current_user)):
 
 @router.get("")
 @trace_call("api.tickets.list_tickets")
-def list_tickets(ctx: dict = Depends(current_user)):
-    # 可见范围：employee 仅自己的工单；operator/admin 显示租户内全部工单
-    if ctx["role"] == "employee":
-        return daos.list_tickets(ctx["tenant_id"], requester_id=ctx["user_id"])
-    return daos.list_tickets(ctx["tenant_id"])
+def list_tickets(ctx: dict = Depends(current_user),
+                 page: int = 1, page_size: int = 20,
+                 status: str = "", q: str = ""):
+    """工单分页列表（需求②）。支持分页/状态筛选/关键词搜索，返回分页包裹。
+
+    - status: 逗号分隔的状态集合，空表示全部（如 "awaiting_approval,done"）。
+    - q: 搜索工单 ID 或标题（忽略大小写）。
+    - 权限：employee 仅自己的工单；operator/admin 显示租户内全部。
+    """
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    statuses = [s.strip() for s in status.split(",") if s.strip()] if status else []
+    requester_id = ctx["user_id"] if ctx["role"] == "employee" else None
+
+    total = daos.count_tickets(ctx["tenant_id"], requester_id=requester_id,
+                               statuses=statuses or None, q=q or None)
+    items = daos.list_tickets(ctx["tenant_id"], limit=page_size, offset=(page - 1) * page_size,
+                              requester_id=requester_id, statuses=statuses or None, q=q or None)
+    return {
+        "items": items, "total": total, "page": page,
+        "page_size": page_size, "pages": (total + page_size - 1) // page_size,
+    }
 
 
 @router.delete("/{ticket_id}")

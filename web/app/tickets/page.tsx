@@ -1,7 +1,7 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Nav from "@/components/Nav";
-import { createTicket, deleteTicket, getConversation, getTicket, getUser, listTickets, runTicket, sendMessage, confirmTicket, cancelTicket, subscribeTicketWS } from "@/lib/api";
+import { createTicket, deleteTicket, getConversation, getTicket, getUser, listTicketsPaginated, runTicket, sendMessage, confirmTicket, cancelTicket, subscribeTicketWS } from "@/lib/api";
 
 type Msg = {
   role: "user" | "assistant" | "system";
@@ -28,7 +28,6 @@ const TOOL_LABEL: Record<string, string> = {
   grant_db_readonly: "开通数据库只读权限",
   revoke_db_readonly: "回收数据库只读权限",
 };
-const IN_PROGRESS = ["created", "triaged", "gathering", "agent_running", "running"];
 // 可取消状态（agent_running 执行中不可取消，同步执行无法中断线程）
 const CANCELABLE = ["created", "triaged", "gathering", "awaiting_approval", "pending_confirm", "failed"];
 
@@ -135,6 +134,10 @@ function MsgView({ m }: { m: Msg }) {
 
 export default function Tickets() {
   const [tickets, setTickets] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(0);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
   const [form, setForm] = useState({ title: "", description: "" });
   const [modalOpen, setModalOpen] = useState(false);
   const [formErr, setFormErr] = useState("");
@@ -150,21 +153,57 @@ export default function Tickets() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const stopStreamRef = useRef<(() => void) | null>(null);
+  const searchRef = useRef(""); // 已执行的搜索关键词（防抖去重）
 
   // 当前用户角色（登录时写入 localStorage）：admin 可删除工单；operator/admin 列表含全部工单
   const role = getUser()?.role ?? null;
   const isAdmin = role === "admin";
   const isOps = role === "operator" || role === "admin";
 
+  // 需求②：筛选 Tab → 后端 status 集合映射
+  const filterStatus = (f: string): string => {
+    if (f === "pending") return "awaiting_approval";
+    if (f === "running") return "created,triaged,gathering,agent_running,running";
+    if (f === "done") return "done,archived";
+    if (f === "failed") return "failed";
+    return "";
+  };
+
+  // 需求②：分页加载（搜索/筛选/页码作为后端参数，联动刷新）
   const refresh = useCallback(async () => {
-    try { setTickets(await listTickets()); } catch { /* */ }
-  }, []);
+    try {
+      const data = await listTicketsPaginated({
+        page, page_size: pageSize, status: filterStatus(filter), q: q || undefined,
+      });
+      setTickets(data.items ?? []);
+      setTotal(data.total ?? 0);
+      setPages(data.pages ?? 0);
+      if (page > 1 && (data.pages ?? 0) < page) setPage(Math.max(1, data.pages));
+    } catch { /* */ }
+  }, [filter, q, page]);
+  // 始终引用最新 refresh（避免轮询 interval 闭包捕获旧参数，导致切页后被旧查询覆盖）
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // 活跃工单实时刷新：轮询对话与状态（多轮追问、关闭确认条、列表状态同步更新）
+  // 需求②：搜索输入防抖 → 重置到第 1 页并刷新
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (q === searchRef.current) return;
+      searchRef.current = q;
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  // 活跃工单实时刷新：对话/状态每秒轮询（实时性所需）；列表仅在状态变化或 10s 兜底时刷新，
+  // 避免每轮询都打 count_tickets + list_tickets 造成无谓的接口压力。
   useEffect(() => {
     if (active === null) return;
+    let lastStatus: string | null = null;
+    let tick = 0;
     const iv = window.setInterval(async () => {
       try {
         const [t2, evts] = await Promise.all([getTicket(active), getConversation(active)]);
@@ -173,7 +212,11 @@ export default function Tickets() {
           [{ role: "user", text: `${t2.title}\n\n${t2.description}`, at: t2.created_at }],
           evts,
         ));
-        setTickets(await listTickets());
+        tick++;
+        if (tick % 10 === 0 || (lastStatus !== null && lastStatus !== t2.status)) {
+          refreshRef.current(); // 状态变化立即同步列表徽章；否则每 10 轮询兜底一次
+        }
+        lastStatus = t2.status;
       } catch { /* ignore */ }
     }, 1000);
     return () => window.clearInterval(iv);
@@ -264,7 +307,7 @@ export default function Tickets() {
           setMsgs(buildMsgs([{ role: "user", text: userText, at: t.created_at }], evts));
           const t2 = await getTicket(t.id).catch(() => null);
           if (t2) setActiveTicket(t2);
-          setTickets(await listTickets());
+          refresh();
         })
         .catch((ex: any) => setMsg(ex.message))
         .finally(() => { stopLive(); setBusy(false); });
@@ -298,7 +341,7 @@ export default function Tickets() {
           [{ role: "user", text: `${t2.title}\n\n${t2.description}`, at: t2.created_at }],
           evts,
         ));
-        setTickets(await listTickets());
+        refresh();
       } catch { /* ignore */ }
       setBusy(false);
     }
@@ -311,7 +354,7 @@ export default function Tickets() {
     try {
       const t = await confirmTicket(active);
       setActiveTicket(t);
-      setTickets(await listTickets());
+      refresh();
     } catch (ex: any) { setMsg(ex.message); }
     finally { setBusy(false); }
   }
@@ -324,7 +367,7 @@ export default function Tickets() {
     try {
       const t = await cancelTicket(active);
       setActiveTicket(t);
-      setTickets(await listTickets());
+      refresh();
       setMsg(`已取消工单 #${active}`);
     } catch (ex: any) { setMsg(ex.message); }
     finally { setBusy(false); }
@@ -363,20 +406,6 @@ export default function Tickets() {
     return "工单正在处理中，请稍候…";
   })();
 
-  const filtered = useMemo(() => {
-    return tickets.filter((t) => {
-      if (filter === "pending") return t.status === "awaiting_approval";
-      if (filter === "running") return IN_PROGRESS.includes(t.status);
-      if (filter === "done") return t.status === "done" || t.status === "archived";
-      if (filter === "failed") return t.status === "failed";
-      return true;
-    }).filter((t) => {
-      if (!q) return true;
-      const s = q.toLowerCase();
-      return String(t.id).includes(s) || (t.title || "").toLowerCase().includes(s);
-    });
-  }, [tickets, filter, q]);
-
   const statusClass = (s: string) => {
     if (s === "done" || s === "archived") return "done";
     if (s === "failed") return "failed";
@@ -385,7 +414,7 @@ export default function Tickets() {
   };
 
   const tab = (key: string, label: string) => (
-    <button type="button" className={filter === key ? "on" : ""} onClick={() => setFilter(key)}>{label}</button>
+    <button type="button" className={filter === key ? "on" : ""} onClick={() => { setFilter(key); setPage(1); }}>{label}</button>
   );
 
   return (
@@ -409,7 +438,7 @@ export default function Tickets() {
             {tab("failed", "失败")}
           </div>
           <div className="ticket-list" ref={listRef}>
-            {filtered.map((t) => (
+            {tickets.map((t) => (
               <div key={t.id} data-id={t.id} className={`ticket-card ${active === t.id ? "active" : ""}`} onClick={() => view(t.id)}>
                 <div className="tc-title">#{t.id} {t.title}</div>
                 <div className="tc-meta">
@@ -427,8 +456,16 @@ export default function Tickets() {
                 )}
               </div>
             ))}
-            {filtered.length === 0 && <p className="muted" style={{ margin: "8px 0", textAlign: "center" }}>暂无匹配工单。</p>}
+            {tickets.length === 0 && <p className="muted" style={{ margin: "8px 0", textAlign: "center" }}>暂无匹配工单。</p>}
           </div>
+          {/* 需求②：分页 UI */}
+          {pages > 1 && (
+            <div className="pager">
+              <button type="button" className="pager-btn" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
+              <span className="pager-info">第 {page} / {pages} 页 · 共 {total} 条</span>
+              <button type="button" className="pager-btn" disabled={page >= pages} onClick={() => setPage(page + 1)}>下一页</button>
+            </div>
+          )}
         </div>
 
         {/* 右栏：详情头 + 对话 + 底部输入区 */}

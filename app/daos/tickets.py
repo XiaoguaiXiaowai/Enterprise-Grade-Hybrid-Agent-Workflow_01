@@ -23,20 +23,55 @@ def get_ticket(ticket_id):
         return conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
 
 
-def list_tickets(tenant_id, limit=50, requester_id=None):
-    """列出工单。requester_id 非空时仅返回该用户创建/归属的个人工单。
-    联表带出创建人用户名（requester_name），供 operator/admin 全量视图区分归属。"""
+def list_tickets(tenant_id, limit=50, offset=0, requester_id=None, statuses=None, q=None):
+    """列出工单（分页 + 状态/关键词过滤）。
+
+    - requester_id 非空时仅返回该用户创建/归属的个人工单。
+    - statuses: 状态集合（如 {"awaiting_approval"}），为空表示不过滤。
+    - q: 搜索关键词（匹配工单 ID 数字或标题，忽略大小写）。
+    联表带出创建人用户名（requester_name），供 operator/admin 全量视图区分归属。
+    """
+    where, params = [], [tenant_id]
+    if requester_id is not None:
+        where.append("t.requester_id = ?")
+        params.append(requester_id)
+    if statuses:
+        placeholders = ",".join("?" * len(statuses))
+        where.append(f"t.status IN ({placeholders})")
+        params.extend(list(statuses))
+    if q:
+        like = f"%{q}%"
+        where.append("(CAST(t.id AS TEXT) LIKE ? OR LOWER(t.title) LIKE LOWER(?))")
+        params.extend([like, like])
+    sql = ("SELECT t.*, u.username AS requester_name FROM tickets t "
+           "LEFT JOIN users u ON u.id = t.requester_id WHERE t.tenant_id = ?")
+    if where:
+        sql += " AND " + " AND ".join(where)
+    sql += " ORDER BY t.id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     with session() as conn:
-        sql = ("SELECT t.*, u.username AS requester_name FROM tickets t "
-               "LEFT JOIN users u ON u.id = t.requester_id WHERE t.tenant_id = ?")
-        params: list = [tenant_id]
-        if requester_id is not None:
-            sql += " AND t.requester_id = ?"
-            params.append(requester_id)
-        sql += " ORDER BY t.id DESC LIMIT ?"
-        params.append(limit)
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+
+def count_tickets(tenant_id, requester_id=None, statuses=None, q=None):
+    """返回满足（租户 + 可见范围 + 状态/关键词过滤）条件的工单总数（分页元数据用）。"""
+    where, params = ["tenant_id = ?"], [tenant_id]
+    if requester_id is not None:
+        where.append("requester_id = ?")
+        params.append(requester_id)
+    if statuses:
+        placeholders = ",".join("?" * len(statuses))
+        where.append(f"status IN ({placeholders})")
+        params.extend(list(statuses))
+    if q:
+        like = f"%{q}%"
+        where.append("(CAST(id AS TEXT) LIKE ? OR LOWER(title) LIKE LOWER(?))")
+        params.extend([like, like])
+    with session() as conn:
+        row = conn.execute(f"SELECT COUNT(*) AS n FROM tickets WHERE {' AND '.join(where)}",
+                           params).fetchone()
+        return row["n"]
 
 
 def update_ticket_meta(ticket_id, risk_level=None, intent_type=None, priority=None):
