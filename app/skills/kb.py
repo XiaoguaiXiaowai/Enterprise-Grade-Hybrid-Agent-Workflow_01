@@ -1,10 +1,12 @@
 """只读工具：企业知识库检索（SQLite FTS5 RAG + LIKE 兜底）。低风险。"""
 from .registry import register_tool
 from ..config import settings
+from ..tracelog import log_exception
 
 try:
     from ..kb import search, search_simple
 except Exception:
+    log_exception()
     def search(q, top_k=None): return []
     def search_simple(q, top_k=None): return []
 
@@ -20,11 +22,13 @@ def search_kb(query: str, top_k: int | None = None) -> dict:
     try:
         hits = search(query, top_k)
     except Exception:
+        log_exception()
         hits = []
     if not hits:
         try:
             hits = search_simple(query, top_k)
         except Exception:
+            log_exception()
             hits = []
     if not hits:
         hits = [{"title": "no_match", "content": _FALLBACK["content"], "rank": 0}]
@@ -44,4 +48,5 @@ def _has_kb() -> bool:
         with session() as conn:
             return conn.execute("SELECT COUNT(*) c FROM kb_fts").fetchone()["c"] > 0
     except Exception:
+        log_exception()
         return False

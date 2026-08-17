@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import BASE_DIR, settings
+from ..tracelog import log_exception
 
 TRANSPORTS = ("stdio", "streamable_http", "sse")
 RISKS = ("low", "medium", "high")
@@ -174,6 +175,7 @@ def load_config(path: str | Path | None = None) -> dict[str, ServerConfig]:
     try:
         raw = json.loads(cfg_path.read_text(encoding="utf-8"))
     except Exception:
+        log_exception()
         return {}
     raw = _expand_env(raw)
     servers_raw = raw.get("servers") if isinstance(raw, dict) else None
@@ -186,6 +188,7 @@ def load_config(path: str | Path | None = None) -> dict[str, ServerConfig]:
         try:
             cfg = _validate_server(item)
         except McpConfigError:
+            log_exception()
             continue  # 单个坏配置不拖垮其它 server（R5 外挂优先原则）
         out[cfg.name] = cfg
     return out

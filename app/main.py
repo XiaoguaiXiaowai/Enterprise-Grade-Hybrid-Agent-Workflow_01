@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from .db import init_db
 from .kb import init_kb, seed_kb
 from . import tracelog
+from .tracelog import log_exception
 from .config import settings
 from .api import auth as auth_api
 from .api import tickets as tickets_api
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
         if vector_kb.vector_enabled() is False and vector_kb._VECTOR_OK:
             vector_kb.index_docs(DEFAULT_KB)
     except Exception:
+        log_exception()
         pass
     auth_api.seed_users()
     yield
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI):
         from .mcp import servers as mcp_servers
         mcp_servers.registry.disconnect_all()
     except Exception:  # noqa: BLE001
+        log_exception()
         pass
 
 

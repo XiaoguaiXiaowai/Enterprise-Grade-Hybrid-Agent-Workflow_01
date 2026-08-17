@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .config import settings
+from .tracelog import log_exception
 
 
 @dataclass
@@ -67,6 +68,7 @@ def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
             raise RuntimeError(
                 f"主用 {primary_model} 返回空内容（可能被 max_tokens 截断或推理未完成）")
         except Exception as e:  # noqa: BLE001
+            log_exception()
             error = e
     # 2) Ollama 兜底
     if fallback_model:
@@ -76,6 +78,7 @@ def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
                                     temperature=temperature)
             return _llm_result_from_ollama_data(data, messages)
         except Exception as e:  # noqa: BLE001
+            log_exception()
             error = e
     # 3) 离线 reader
     if reader_builder is not None:

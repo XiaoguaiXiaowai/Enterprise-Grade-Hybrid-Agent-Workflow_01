@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..deps import require_role
 from ..mcp import servers as mcp_servers
-from ..tracelog import trace_call
+from ..tracelog import trace_call, log_exception
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
@@ -52,6 +52,7 @@ def connect(name: str, ctx: dict = Depends(require_role("operator", "admin"))):
     try:
         conn = mcp_servers.registry.get_connection(name, refresh=True)
     except mcp_servers.McpUnavailable as e:
+        log_exception()
         raise HTTPException(status_code=404, detail=str(e))
     if not conn.healthy:
         raise HTTPException(status_code=502, detail=f"连接失败: {conn.error}")

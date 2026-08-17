@@ -14,6 +14,7 @@
 from .config import settings
 from .db import session
 from . import vector_kb, rerank
+from .tracelog import log_exception
 
 FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5(title, content, tag);
@@ -54,6 +55,7 @@ def rebuild_indexes() -> None:
                         for d in docs]
             vector_kb.index_docs(vec_docs)
         except Exception:
+            log_exception()
             pass
 
 
@@ -82,6 +84,7 @@ def add_document(filename: str, title: str, content: str, tag: str = "doc") -> i
         try:
             vector_kb.upsert_docs([{"title": title, "tag": tag, "content": content}])
         except Exception:
+            log_exception()
             pass
     return new_id
 
@@ -99,6 +102,7 @@ def delete_document(doc_id: int) -> bool:
         try:
             vector_kb.delete_docs([title])
         except Exception:
+            log_exception()
             pass
     return True
 
@@ -158,6 +162,7 @@ def _vector_hits(query: str, top_k: int | None = None, tag: str | None = None) -
     try:
         return vector_kb.search(query, top_k, tag=tag)
     except Exception:
+        log_exception()
         return []
 
 
@@ -220,6 +225,7 @@ def _fts(query: str, top_k: int | None = None, tag: str | None = None) -> list[d
             rows = conn.execute(sql, params).fetchall()
             return [dict(r) for r in rows]
     except Exception:
+        log_exception()
         return []
 
 

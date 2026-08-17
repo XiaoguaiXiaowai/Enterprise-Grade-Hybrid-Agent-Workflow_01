@@ -15,7 +15,9 @@
   [10:15:03]  TRACE  exit   orchestrator._run_loop  ok
   [10:15:03]  REQUEST  POST  /api/tickets  ->  api.tickets.create_ticket
 """
+import inspect
 import os
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -83,6 +85,31 @@ def log(kind: str, name: str, *details) -> None:
     d = "  ".join(str(x) for x in details if x is not None)
     ts = _now().strftime("%H:%M:%S")
     _emit(f"[{ts}]  TRACE  {kind:<5}  {name}" + (f"  {d}" if d else ""))
+
+
+def log_exception(extra: str = "") -> None:
+    """在 except 块内调用：把函数名/函数位置与异常内容写入日志。
+
+    自动通过堆栈定位调用者（即所在 except 块的函数名、文件与行号），
+    并利用 sys.exc_info() 取到当前被捕获的异常。若日志未开启则直接返回。
+    """
+    if not enabled():
+        return
+    exc = sys.exc_info()[1]
+    caller = inspect.currentframe().f_back if inspect.currentframe() is not None else None
+    if caller is None:
+        return
+    fn = caller.f_code.co_name
+    file = os.path.basename(caller.f_code.co_filename)
+    line = caller.f_lineno
+    name = f"{file}:{line} {fn}"
+    if exc is not None:
+        content = f"{exc.__class__.__name__}: {exc}"
+        if extra:
+            content = f"{extra} -> {content}"
+        log("except", name, content)
+    elif extra:
+        log("except", name, f"no-exc {extra}")
 
 
 def trace_call(name: str):

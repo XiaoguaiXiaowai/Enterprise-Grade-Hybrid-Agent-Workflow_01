@@ -26,7 +26,7 @@ from ..config import settings
 from ..db import session as db_session
 from ..guards import fingerprint, is_duplicate
 from ..skills import masker
-from ..tracelog import log
+from ..tracelog import log, log_exception
 from . import servers as mcp_servers
 from .config import load_config
 
@@ -35,6 +35,7 @@ try:
     from agents.tool import ToolContext
     _FT_OK = True
 except Exception:  # pragma: no cover
+    log_exception()
     FunctionTool = None  # type: ignore
     ToolContext = None  # type: ignore
     _FT_OK = False
@@ -90,6 +91,7 @@ def _invoke_mcp(ctx, conn_name: str, tool_name: str, params: dict[str, Any]) -> 
     try:
         conn = mcp_servers.registry.get_connection(conn_name)
     except mcp_servers.McpUnavailable as e:
+        log_exception()
         _record_tool_error(ctx, full_name, RuntimeError(f"MCP: {e}"))
         return {"status": "error", "error": f"MCP: {e}"}
     if not conn.healthy or tool_name not in conn.tools:
@@ -101,6 +103,7 @@ def _invoke_mcp(ctx, conn_name: str, tool_name: str, params: dict[str, Any]) -> 
     try:
         budget.check()
     except BudgetExceeded as be:
+        log_exception()
         _record_tool_error(ctx, full_name, be, extra={"kind": be.kind})
         return {"status": "error", "error": str(be)}
 
@@ -123,6 +126,7 @@ def _invoke_mcp(ctx, conn_name: str, tool_name: str, params: dict[str, Any]) -> 
             else:
                 status = "done"
     except Exception as e:  # noqa: BLE001
+        log_exception()
         result, status = {"error": str(e)}, "failed"
     latency = int((time.time() - t0) * 1000)
 
@@ -210,6 +214,7 @@ def _make_function_tool(server_name: str, tool_name: str):
             if conn.healthy:
                 base = getattr(conn.tools.get(tool_name), "description", "") or ""
         except Exception:
+            log_exception()
             pass
         if not base:
             base = getattr(mapping, "description", "") or f"MCP 工具 {server_name}/{tool_name}"
@@ -223,6 +228,7 @@ def _make_function_tool(server_name: str, tool_name: str):
                 if not isinstance(params, dict):
                     params = {}
             except Exception:
+                log_exception()
                 params = {}
         return _invoke_mcp(ctx, server_name, tool_name, params)
 
@@ -233,6 +239,7 @@ def _make_function_tool(server_name: str, tool_name: str):
         if conn.healthy:
             schema = getattr(conn.tools.get(tool_name), "input_schema", None)
     except Exception:
+        log_exception()
         schema = None
     if not isinstance(schema, dict):
         schema = {"type": "object", "properties": {}}

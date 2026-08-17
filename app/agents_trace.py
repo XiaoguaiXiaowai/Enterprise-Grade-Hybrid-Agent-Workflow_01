@@ -14,11 +14,13 @@ from __future__ import annotations
 import json
 
 from . import trace as trace_mod
+from .tracelog import log_exception
 
 try:
     from agents.tracing import TracingProcessor, set_trace_processors, set_tracing_disabled
     _SDK_OK = True
 except Exception:  # pragma: no cover
+    log_exception()
     TracingProcessor = object  # type: ignore
     set_trace_processors = None  # type: ignore
     set_tracing_disabled = None  # type: ignore
@@ -36,6 +38,7 @@ def _duration_ms(span) -> int:
         if span.started_at and span.ended_at:
             return max(0, int((util.parse_iso(span.ended_at) - util.parse_iso(span.started_at)).total_seconds() * 1000))
     except Exception:
+        log_exception()
         pass
     return 0
 
@@ -75,6 +78,7 @@ class LocalTraceProcessor(TracingProcessor):
         try:
             self._write(trace)
         except Exception:
+            log_exception()
             pass  # 落库失败不应影响工单主流程
         finally:
             self._traces.pop(trace.trace_id, None)
@@ -89,6 +93,7 @@ class LocalTraceProcessor(TracingProcessor):
             if exp:
                 self._spans.setdefault(span.trace_id, []).append(exp)
         except Exception:
+            log_exception()
             pass
 
     def shutdown(self) -> None:
@@ -135,6 +140,7 @@ def _duration_ms_export(span: dict) -> int:
         if a and b:
             return max(0, int((b - a).total_seconds() * 1000))
     except Exception:
+        log_exception()
         pass
     return 0
 
@@ -147,4 +153,5 @@ def install() -> None:
         set_tracing_disabled(False)
         set_trace_processors([LocalTraceProcessor()])
     except Exception:
+        log_exception()
         pass

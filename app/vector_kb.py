@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 
 from .config import settings
+from .tracelog import log_exception
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ try:
     import numpy as np
     _VECTOR_OK = True
 except Exception:  # pragma: no cover - 依赖缺失时的降级
+    log_exception()
     lancedb = None
     np = None
     _VECTOR_OK = False
@@ -47,6 +49,7 @@ def _is_indexed() -> bool:
         db = _connect()
         return _TABLE in db.table_names()
     except Exception:
+        log_exception()
         return False
 
 
@@ -81,6 +84,7 @@ def embed(texts: list[str]) -> list[list[float]]:
             if vecs and all(v for v in vecs):
                 return vecs
         except Exception:
+            log_exception()
             pass  # 主用失败 → 落兜底
     fallback_model = (settings.embedding_fallback_model or "").strip()
     if fallback_model:
@@ -284,6 +288,7 @@ def _maybe_create_ann_index(tbl) -> None:
         )
         logger.info("已创建 ANN 索引: %s", settings.vector_ann_index_type)
     except Exception as e:  # noqa: BLE001
+        log_exception()
         logger.warning("ANN 索引创建失败，继续用精确扫描: %s", e)
 
 
@@ -327,6 +332,7 @@ def upsert_docs(docs: list[dict]) -> int:
         try:
             tbl.delete(f"title = '{_sql_escape(t)}'")
         except Exception:
+            log_exception()
             pass  # 无该 title 也 OK
     tbl.add(rows)
     return len(rows)
@@ -343,6 +349,7 @@ def delete_docs(doc_titles: list[str]) -> int:
         try:
             total += tbl.delete(f"title = '{_sql_escape(t)}'")
         except Exception:
+            log_exception()
             pass
     return total
 
@@ -379,5 +386,6 @@ def search(query: str, top_k: int | None = None, tag: str | None = None) -> list
             "score": round(float(h.get("_distance", 0.0)), 4),
         } for h in hits]
     except Exception as e:  # noqa: BLE001
+        log_exception()
         logger.warning("向量检索异常，回退关键词: %s", e)
         return []

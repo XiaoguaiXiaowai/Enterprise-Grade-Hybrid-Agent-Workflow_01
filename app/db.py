@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .config import settings
+from .tracelog import log_exception
 
 
 def connect() -> sqlite3.Connection:
@@ -23,6 +24,7 @@ def session():
         yield conn
         conn.commit()
     except Exception:
+        log_exception()
         conn.rollback()
         raise
     finally:

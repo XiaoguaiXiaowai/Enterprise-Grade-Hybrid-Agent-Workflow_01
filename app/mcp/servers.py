@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import BASE_DIR, settings
-from ..tracelog import log
+from ..tracelog import log, log_exception
 from .config import ServerConfig, load_config
 
 try:  # SDK 不可用时模块仍可导入、注册表为空（与 agents_tools._SDK_OK 同风格）
@@ -39,6 +39,7 @@ try:  # SDK 不可用时模块仍可导入、注册表为空（与 agents_tools.
     )
     _MCP_OK = True
 except Exception:  # pragma: no cover
+    log_exception()
     MCPServerStdio = MCPServerStreamableHttp = MCPServerSse = None  # type: ignore
     MCPServerStdioParams = MCPServerStreamableHttpParams = MCPServerSseParams = None  # type: ignore
     create_static_tool_filter = None  # type: ignore
@@ -149,6 +150,7 @@ class McpRegistry:
                     f"{cfg.name} connected tools={sorted(tools)}")
                 return conn
             except Exception as e:  # noqa: BLE001 —— 连接失败绝不向上抛
+                log_exception()
                 last_err = f"{type(e).__name__}: {e}"
                 log("info", "mcp.servers._connect", f"{cfg.name} attempt={attempt} e={last_err}")
         # 全部失败：清理残留 server（防子进程泄漏）
@@ -156,6 +158,7 @@ class McpRegistry:
             try:
                 _LOOP.run_coro(conn.server.cleanup(), timeout=cfg.client_timeout_seconds + 5)
             except Exception:  # noqa: BLE001
+                log_exception()
                 pass
         if old is not None:
             self._conns[cfg.name] = old  # 保持旧连接对象以保留先前的 healthy 状态
@@ -199,6 +202,7 @@ class McpRegistry:
         try:
             return [cfg.redacted() for cfg in load_config().values()]
         except Exception:  # noqa: BLE001
+            log_exception()
             return []
 
     def status(self, name: str | None = None) -> list[dict]:
@@ -238,8 +242,10 @@ class McpRegistry:
         try:
             res = _LOOP.run_coro(work(), timeout=timeout)
         except asyncio.TimeoutError:
+            log_exception()
             return {"ok": False, "error": f"MCP 工具超时（>{timeout}s）: {tool_name}"}
         except Exception as e:  # noqa: BLE001 —— transport 错误等，记为工具失败
+            log_exception()
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
         return _parse_call_tool_result(res, tool_name)
 
@@ -255,6 +261,7 @@ class McpRegistry:
             timeout = (conn.cfg.client_timeout_seconds or 5.0) + 5.0
             _LOOP.run_coro(conn.server.cleanup(), timeout=timeout)
         except Exception as e:  # noqa: BLE001
+            log_exception()
             log("info", "mcp.servers.disconnect", f"{name} cleanup e={e}")
 
     def disconnect_all(self) -> None:
@@ -283,6 +290,7 @@ def _parse_call_tool_result(res, tool_name: str) -> dict:
                 return {"ok": False, "error": str(data)[:500]}
             return {"ok": True, "data": data}
         except Exception:
+            log_exception()
             pass
     text = ""
     for block in (getattr(res, "content", None) or []):
@@ -297,6 +305,7 @@ def _parse_call_tool_result(res, tool_name: str) -> dict:
             if isinstance(parsed, (dict, list)):
                 return {"ok": True, "data": parsed}
         except Exception:
+            log_exception()
             pass
     return {"ok": True, "data": text}
 

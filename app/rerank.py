@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from .config import settings
+from .tracelog import log_exception
 
 # 进程级缓存：Ollama 兜底可用性（None=未探测，True/False=结果）
 _ollama_rerank_ok: bool | None = None
@@ -36,6 +37,7 @@ def _probe_ollama_rerank() -> bool:
                        timeout=8)
         _ollama_rerank_ok = r.status_code == 200
     except Exception:
+        log_exception()
         _ollama_rerank_ok = False
     return _ollama_rerank_ok
 
@@ -100,6 +102,7 @@ def _try_openrouter(query: str, texts: list[str]) -> list[tuple[int, float]] | N
         return [(int(it["index"]), float(it["relevance_score"]))
                 for it in data.get("results", [])]
     except Exception:
+        log_exception()
         return None
 
 
@@ -124,6 +127,7 @@ def _try_ollama(query: str, texts: list[str]) -> list[tuple[int, float]] | None:
         return [(int(it["index"]), float(it.get("score", it.get("relevance_score", 0.0))))
                 for it in results]
     except Exception:
+        log_exception()
         return None
 
 
@@ -153,5 +157,6 @@ def rewrite_query(query: str) -> str:
         if new and len(new) <= 60:
             return new
     except Exception:
+        log_exception()
         pass
     return query

@@ -20,11 +20,13 @@ from .config import settings
 from .guards import fingerprint, is_duplicate
 from .skills import registry
 from .db import session as db_session
+from .tracelog import log_exception
 
 try:
     from agents import function_tool, RunContextWrapper
     _SDK_OK = True
 except Exception:  # pragma: no cover
+    log_exception()
     function_tool = None  # type: ignore
     RunContextWrapper = None  # type: ignore
     _SDK_OK = False
@@ -81,6 +83,7 @@ def _run(tool: str, ctx, params: dict):
     try:
         budget.check()
     except BudgetExceeded as be:
+        log_exception()
         _record_tool_error(ctx, tool, be, extra={"kind": be.kind})
         return {"status": "error", "error": str(be)}
 
@@ -95,6 +98,7 @@ def _run(tool: str, ctx, params: dict):
         latency = int((time.time() - t0) * 1000)
         status = "done" if resp.get("ok", True) else "failed"
     except Exception as e:  # noqa: BLE001
+        log_exception()
         resp, latency, status = {"ok": False, "error": str(e)}, 0, "failed"
 
     key = fingerprint(f"ticket:{ticket_id}", tool, params)
@@ -198,4 +202,5 @@ def build_mcp_tools(role: str, names) -> list:
         from .mcp.bridge import build_mcp_tools as _bmt
         return _bmt(role, list(names))
     except Exception:  # pragma: no cover —— MCP 集成异常不影响本地工具面
+        log_exception()
         return []

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from .db import session
 from .config import settings
+from .tracelog import log_exception
 
 
 def hash_password(password: str) -> str:
@@ -19,6 +20,7 @@ def verify_password(password: str, stored: str) -> bool:
     try:
         salt, hexdigest = stored.split("$", 1)
     except ValueError:
+        log_exception()
         return False
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(),
                                  settings.pbkdf2_iterations)

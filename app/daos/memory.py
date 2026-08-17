@@ -6,6 +6,7 @@
 import json
 
 from ..db import session
+from ..tracelog import log_exception
 
 # 每个 key 最多保留的条目数（防止无限膨胀）
 _MAX_ENTRIES = 10
@@ -22,6 +23,7 @@ def append(tenant_id: int, key: str, entry: dict, source: str = "agent") -> None
             try:
                 entries = json.loads(row["value_json"] or "[]")
             except Exception:
+                log_exception()
                 entries = []
         if not isinstance(entries, list):
             entries = []

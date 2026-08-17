@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from .. import kb as kb_mod
 from ..deps import require_role
+from ..tracelog import log_exception
 
 router = APIRouter(prefix="/api/kb", tags=["kb"])
 
@@ -83,6 +84,7 @@ async def upload(file: UploadFile = File(...),
     try:
         raw = _extract_text(filename, data)
     except Exception as e:
+        log_exception()
         raise HTTPException(status_code=400,
                             detail=f"文件解析失败: {type(e).__name__}")
     if not raw:

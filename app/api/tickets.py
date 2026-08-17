@@ -14,7 +14,7 @@ from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
 from ..classifier import classify, relevance_check, rewrite_content, followup_relevance_check
 from ..config import settings as _settings
-from ..tracelog import trace_call, enabled, log
+from ..tracelog import trace_call, enabled, log, log_exception
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -166,6 +166,7 @@ def _recent_dialogue(ticket_id: int, limit: int = 6) -> str:
         try:
             payload = json.loads(e["payload_json"] or "{}")
         except Exception:
+            log_exception()
             payload = {}
         if e["event_type"] == "user_message":
             lines.append(f"用户：{payload.get('content', '')}")
@@ -330,6 +331,7 @@ def events(ticket_id: int, token: str | None = None):
                 else:
                     asyncio.sleep(0.3)
         except asyncio.CancelledError:
+            log_exception()
             return
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -370,6 +372,7 @@ async def ws_events(websocket: WebSocket, ticket_id: int, token: str | None = No
             else:
                 await asyncio.sleep(0.3)
     except WebSocketDisconnect:
+        log_exception()
         return
 
 

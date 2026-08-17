@@ -9,6 +9,7 @@ from . import daos
 from .config import settings
 from .skills import registry
 from .prompts.context import CONSTRAINTS_TMPL, render_lines
+from .tracelog import log_exception
 
 # 阈值外部化（整改②：CTX_MAX_HISTORY / CTX_MAX_OBS_LEN / CTX_MIN_TRUNCATE）
 MAX_HISTORY = settings.ctx_max_history      # 只保留最近 N 条
@@ -37,6 +38,7 @@ def _compress_obs(text: str) -> str:
             if new:
                 return f"[LLM 压缩] {new}"
         except Exception:  # noqa: BLE001
+            log_exception()
             pass
     head = text[:400].replace("\n", " ")
     tail = text[-120].replace("\n", " ")

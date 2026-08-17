@@ -24,7 +24,7 @@ from . import agents_trace as atrace
 from .config import settings
 from .context_assembler import render
 from . import trace as trace_mod
-from .tracelog import log
+from .tracelog import log, log_exception
 
 # Trace 版本号单一常量（整改⑤）：全项目 prompt_version 统一引用此处，
 # 升级提示词只需改这一处（agents_tools / agents_trace / orchestrator 均已引用）。
@@ -89,6 +89,7 @@ def _interruption_params(item) -> dict:
             parsed = json.loads(args)
             return parsed if isinstance(parsed, dict) else {}
     except Exception:
+        log_exception()
         pass
     return {}
 
@@ -136,6 +137,7 @@ def _serialize_run_state_for_db(state, run_ctx: dict) -> str:
             }
         return json.dumps(state_json, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
+        log_exception()
         log("info", "agents_runner._serialize_run_state_for_db", f"e={e}")
         return ""
 
@@ -160,6 +162,7 @@ def _raw_item_to_json(item) -> str:
             "arguments": getattr(raw, "arguments", "{}"),
         }, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
+        log_exception()
         log("info", "agents_runner._raw_item_to_json", f"e={e}")
         return ""
 
@@ -221,6 +224,7 @@ def _usage_tokens(usage) -> int:
         return int(getattr(usage, "prompt_tokens", 0) or 0) + \
             int(getattr(usage, "completion_tokens", 0) or 0)
     except Exception:  # noqa: BLE001
+        log_exception()
         return 0
 
 
@@ -253,6 +257,7 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
         result = _run(agent, user_input, run_config, run_ctx, max_turns=budget.max_steps)
         log("info", "agents_runner.run_sdk", f"result={result}")
     except Exception as e:
+        log_exception()
         log("info", "agents_runner.run_sdk", f"e={e}")
         if routing["provider"] == "openrouter":
             try:
@@ -263,6 +268,7 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
                 routing = {**routing, "provider": "ollama",
                            "model": settings.agent_fallback_model}
             except Exception as e2:
+                log_exception()
                 raise SdkUnavailable(
                     f"SDK 模型调用失败: {e}; Ollama 兜底也失败: {e2}") from e2
         else:
@@ -378,11 +384,13 @@ def _rebuild_approval_item(state, ap) -> "object":
         try:
             raw = json.loads(ap["raw_item_json"])
         except Exception:  # noqa: BLE001
+            log_exception()
             raw = None
     if not isinstance(raw, dict):
         try:
             params = json.loads(ap.get("params_json") or "{}")
         except Exception:  # noqa: BLE001
+            log_exception()
             params = {}
         call_id = _find_original_call_id(state, tool_name) or f"restored-{ap['id']}"
         raw = {
@@ -414,6 +422,7 @@ def _resume_from_db(approval_id: int, decision: str,
         run_ctx_db = json.loads(ap["run_ctx_json"] or "{}")
         budget_db = json.loads(ap["budget_json"] or "{}")
     except Exception as e:  # noqa: BLE001
+        log_exception()
         raise RuntimeError(f"审批恢复数据损坏: {e}") from e
 
     ticket_id = ap["ticket_id"]

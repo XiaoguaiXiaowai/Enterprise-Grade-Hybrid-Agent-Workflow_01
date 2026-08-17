@@ -10,7 +10,7 @@ import re
 
 from .config import settings
 from .llm_gateway import chat_with_fallback
-from .tracelog import enabled, log
+from .tracelog import enabled, log, log_exception
 from .prompts.classifier import (
     INTENT_RULES as _INTENT_RULES,
     RISK_RULES as _RISK_RULES,
@@ -51,6 +51,7 @@ def _parse_json(text: str) -> dict | None:
     try:
         return json.loads(m.group(0))
     except Exception:
+        log_exception()
         return None
 
 def classify(title: str = "", description: str = "", rewritten: str | None = None) -> dict:
@@ -87,6 +88,7 @@ def classify(title: str = "", description: str = "", rewritten: str | None = Non
                         "reason": data.get("reason", ""),
                     }
         except Exception:
+            log_exception()
             pass
 
     intent, risk = _rule_classify(focus)
@@ -123,6 +125,7 @@ def relevance_check(title: str, description: str) -> dict:
                 return {"relevant": data["relevant"], "reason": data.get("reason", ""),
                         "source": "llm"}
         except Exception:
+            log_exception()
             log("info", "relevance_check", "LLM 异常")
             pass
 
@@ -167,6 +170,7 @@ def followup_relevance_check(ticket_title: str, ticket_desc: str,
                 return {"relevant": data["relevant"],
                         "reason": data.get("reason", ""), "source": "llm"}
         except Exception:
+            log_exception()
             log("info", "followup_relevance_check", "LLM 异常")
             pass
 
@@ -204,8 +208,9 @@ def rewrite_content(title: str, description: str) -> dict:
                 log("info", "rewrite_content", "LLM 判定")
                 return {"summary": data["summary"],
                         "keywords": data.get("keywords", []), "source": "llm"}
-        except Exception:
-            log("info", "rewrite_content", "LLM 异常")
+        except Exception as e:
+            log_exception()
+            log("info", "rewrite_content", f"LLM 异常：{str(e)}")
             pass
     log("info", "rewrite_content", "兜底")
     return {"summary": text, "keywords": [], "source": "rule"}

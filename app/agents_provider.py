@@ -12,6 +12,7 @@ SDK 不可用时返回 None，调用方沿用 LLMGateway 兜底（离线可演�
 from __future__ import annotations
 
 from .config import settings
+from .tracelog import log_exception
 
 try:
     from agents import ModelProvider
@@ -19,6 +20,7 @@ try:
     from openai import AsyncOpenAI
     _SDK_OK = True
 except Exception:  # pragma: no cover
+    log_exception()
     ModelProvider = None  # type: ignore
     OpenAIChatCompletionsModel = None  # type: ignore
     AsyncOpenAI = None  # type: ignore

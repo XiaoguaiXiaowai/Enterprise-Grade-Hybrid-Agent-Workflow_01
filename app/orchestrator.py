@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 
 from . import daos, trace as trace_mod, metrics as metrics_mod
-from .tracelog import trace_call
+from .tracelog import trace_call, log_exception
 from .db import session as db_session
 from .budget import Budget, BudgetExceeded
 from .context_assembler import assemble, render
@@ -75,6 +75,7 @@ def _normalize_tool_params(tool: str, params: dict) -> dict:
     try:
         sig = inspect.signature(tw.fn)
     except Exception:  # noqa: BLE001
+        log_exception()
         return params
     names = set(sig.parameters)
     out: dict = {}
@@ -207,6 +208,7 @@ def _collect_final_answer(ticket_id) -> str:
             try:
                 p = json.loads(e["payload_json"] or "{}")
             except Exception:
+                log_exception()
                 p = {}
             if p.get("kind") == "final" and p.get("content"):
                 return p["content"]
@@ -286,6 +288,7 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                     ticket_id, ctx, actor, budget, routing, req_id=req_id)
                 log("info", "orchestrator._run_loop", f"agents_runner.run_sdk -- sdk_result={sdk_result}")
             except agents_runner.SdkUnavailable:
+                log_exception()
                 log("info", "orchestrator._run_loop", f"4: {agents_runner.SdkUnavailable}")
                 # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
                 _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
@@ -322,6 +325,7 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
         return {"status": "done", "ticket_id": ticket_id}
 
     except _NeedsApproval as na:
+        log_exception()
         log("info", "orchestrator._run_loop", f"8: {na.approval_id}")
         daos.transition(ticket_id, "awaiting_approval", actor, reason="HITL 中断")
         _record_metrics(ticket_id, ticket["intent_type"], human_takeover=True)
@@ -329,12 +333,14 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                 "tool": na.tool, "params": na.params}
 
     except BudgetExceeded as be:
+        log_exception()
         log("info", "orchestrator._run_loop", f"9: {be.kind}")
         daos.transition(ticket_id, "failed", actor, reason=f"预算触顶: {be.kind}")
         _record_metrics(ticket_id, ticket["intent_type"], success=False, correct_failure=True)
         return {"status": "failed", "reason": f"预算触顶: {be.kind}"}
 
     except Exception as e:  # noqa: BLE001
+        log_exception()
         log("info", "orchestrator._run_loop", f"10: {e}")
         daos.transition(ticket_id, "failed", actor, reason=f"异常: {e}")
         _record_metrics(ticket_id, ticket["intent_type"], success=False)
@@ -360,6 +366,7 @@ def actor_role(actor: str) -> str:
         if row:
             return row["role"]
     except Exception:  # noqa: BLE001
+        log_exception()
         pass
     if actor in ("admin", "operator"):
         return actor
@@ -374,6 +381,7 @@ def _load_history(ticket_id) -> list[dict]:
         try:
             payload = json.loads(e["payload_json"] or "{}")
         except Exception:
+            log_exception()
             payload = {}
         # 计划类 model_call（tool() 指令文本）不进上下文，避免污染
         if e["event_type"] == "model_call" and payload.get("kind") == "plan":
@@ -409,6 +417,7 @@ def _load_memo(tenant_id) -> str:
                     f"「{e.get('title', '')}」({e.get('intent', '')}/{e.get('risk', '')}): {summary}")
             return "\n".join(lines)
     except Exception:
+        log_exception()
         pass
     return raw
 
@@ -420,6 +429,7 @@ def _lookup_rewrite(ticket_id) -> dict | None:
             try:
                 payload = json.loads(e["payload_json"] or "{}")
             except Exception:
+                log_exception()
                 payload = {}
             if payload.get("summary"):
                 return payload
@@ -463,6 +473,7 @@ def _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed):
             # 缺必需参数（如工单未提供目标用户）：跳过该工具并留痕，不静默失败整单。
             # 传统链路的文本解析无法区分"条件式"工具名（如 reader 模板里的
             # "若涉及用户/权限则 query_user_dir"）与真实调用意图。
+            log_exception()
             daos.add_event(ticket_id, "log",
                            {"skipped_tool": c["tool"], "reason": str(e)}, actor)
             continue
@@ -498,6 +509,7 @@ def _execute_tool(ticket_id, tool, params, actor, budget, req_id, provider, mode
         latency = int((time.time() - t0) * 1000)
         status = "done" if resp.get("ok") else "failed"
     except Exception as e:  # noqa: BLE001
+        log_exception()
         resp, latency, status = {"ok": False, "error": str(e)}, 0, "failed"
 
     key = fingerprint(f"ticket:{ticket_id}", tool, params)
@@ -527,6 +539,7 @@ def _record_metrics(ticket_id, intent_type, success=False, correct_failure=False
         metrics_mod.record(ticket_id, success=success, correct_failure=correct_failure,
                            latency_ms=latency, cost=cost, human_takeover=human_takeover)
     except Exception:
+        log_exception()
         pass  # 指标失败不影响工单主流程
 
 
@@ -548,6 +561,7 @@ def _accumulate_metrics(ticket_id) -> tuple[int, float]:
         try:
             usage = json.loads(r["token_usage_json"] or "{}")
         except Exception:
+            log_exception()
             usage = {}
         tokens = usage.get("total_tokens") or (
             (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0))
