@@ -4,6 +4,6 @@ from .tickets import (  # noqa: F401
     transition, add_event, list_events, list_events_after,
     update_ticket_meta,
 )
-from .approvals import request as request_approval, decide as decide_approval, get as get_approval, pending_for_ticket, save_run_state  # noqa: F401
+from .approvals import request as request_approval, decide as decide_approval, get as get_approval, pending_for_ticket, save_run_state, list_approvals, count_approvals  # noqa: F401
 from .tool_calls import record as record_tool_call, latest_success as latest_tool_success  # noqa: F401
 from .memory import append as append_memory, latest as latest_memory  # noqa: F401

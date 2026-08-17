@@ -138,8 +138,25 @@ export function approve(ticketId: number, approvalId: number, decision: string, 
     body: JSON.stringify({ approval_id: approvalId, decision, reason }),
   });
 }
-export function getMetrics() {
-  return req<any>("/api/metrics");
+// 审批台一览（分页）：status = pending | history | all。返回 {items, total, page, page_size, pages}
+export function listApprovals(params: { page?: number; page_size?: number; status?: string } = {}) {
+  const sp = new URLSearchParams();
+  if (params.page) sp.set("page", String(params.page));
+  if (params.page_size) sp.set("page_size", String(params.page_size));
+  if (params.status) sp.set("status", params.status);
+  const qs = sp.toString();
+  return req<any>(`/api/approvals${qs ? `?${qs}` : ""}`);
+}
+// 监控指标：支持时间段筛选（start/end YYYY-MM-DD）或 all=1 全部历史；缺省后端取当月
+export function getMetrics(params: { start?: string; end?: string; all?: boolean } = {}) {
+  const sp = new URLSearchParams();
+  if (params.all) sp.set("all", "1");
+  else {
+    if (params.start) sp.set("start", params.start);
+    if (params.end) sp.set("end", params.end);
+  }
+  const qs = sp.toString();
+  return req<any>(`/api/metrics${qs ? `?${qs}` : ""}`);
 }
 
 // MCP 工具面（M5-P2）：外部工具server状态 / 工具映射表 / 连接控制 / 热刷新
