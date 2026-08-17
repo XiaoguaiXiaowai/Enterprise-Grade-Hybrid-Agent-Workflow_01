@@ -7,7 +7,7 @@ M2 覆盖：
 """
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .db import session
 from .config import settings
@@ -24,7 +24,11 @@ def fingerprint(scope: str, tool_name: str, params: dict) -> str:
 def is_duplicate(ticket_id: int, tool_name: str, params: dict) -> bool:
     """时间窗内该工单已成功执行过相同调用 → 视为重复。"""
     fprint = fingerprint(f"ticket:{ticket_id}", tool_name, params)
-    since = (datetime.now() - timedelta(minutes=WINDOW_MINUTES)).isoformat()
+    # created_at 落库为 SQLite datetime('now')（UTC，形如 'YYYY-MM-DD HH:MM:SS'）；
+    # 此处须用同格式 + UTC 作字符串比较，否则两种不一致都会导致永不命中
+    # （M5 治理验证发现：isoformat 'T' 分隔 / 本地时区偏差各踩一次）
+    since = (datetime.now(timezone.utc) - timedelta(minutes=WINDOW_MINUTES)).strftime(
+        "%Y-%m-%d %H:%M:%S")
     with session() as conn:
         row = conn.execute(
             """SELECT COUNT(*) c FROM tool_calls

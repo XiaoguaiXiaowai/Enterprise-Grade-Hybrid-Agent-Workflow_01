@@ -12,3 +12,5 @@ pyarrow==25.0.1
 numpy==2.5.2
 pypdf==6.15.0
 python-docx==1.2.0
+# MCP 集成（M5）：官方 Model Context Protocol Python SDK（mcp 2.x，openai-agents 0.20.0 自带 MCP_V2 兼容）
+mcp==2.0.0

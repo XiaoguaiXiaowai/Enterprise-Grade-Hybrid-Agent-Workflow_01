@@ -1,0 +1,1 @@
+"""示例 MCP Server 集（M5）：被 openai-agents MCPServerStdio 拉起的独立子进程。"""

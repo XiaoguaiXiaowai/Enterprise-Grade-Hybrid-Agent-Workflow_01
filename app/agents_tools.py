@@ -190,3 +190,12 @@ def build_sdk_tools(role: str) -> list:
         return []
     return [_wrap_tool(fn) for fn in _SDK_TOOLS
             if role in registry.roles_for_tool(_tool_meta(fn)[0])]
+
+
+def build_mcp_tools(role: str, names) -> list:
+    """按角色+工具名返回 MCP FunctionTool（转发 app.mcp.bridge；MCP 工具同样过治理）。"""
+    try:
+        from .mcp.bridge import build_mcp_tools as _bmt
+        return _bmt(role, list(names))
+    except Exception:  # pragma: no cover —— MCP 集成异常不影响本地工具面
+        return []

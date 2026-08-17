@@ -124,6 +124,14 @@ class Settings:
     input_relevance_check: bool = os.getenv("INPUT_RELEVANCE_CHECK", "true").lower() in ("1", "true", "yes", "on")
     # 建单内容不直接并入提示词，先用 LLM 总结归纳后再并入（默认开）
     prompt_rewrite: bool = os.getenv("PROMPT_REWRITE", "true").lower() in ("1", "true", "yes", "on")
+
+    # ===== MCP 集成（M5）=====
+    # 总开关：false 时 MCP 工具不装配、管理端点返回空列表，行为回到 M4
+    mcp_enabled: bool = os.getenv("MCP_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    # mcp_servers.json 路径（相对项目根或绝对路径）
+    mcp_config_path: str = os.getenv("MCP_CONFIG_PATH", "mcp_servers.json")
+    # 单次 MCP 操作（连接/工具调用）的超时（秒）；ServerConfig 可 per-server 覆盖
+    mcp_timeout_seconds: float = float(os.getenv("MCP_TIMEOUT_SECONDS", "15"))
     @staticmethod
     def _first_nonempty(*keys: str, default: str = "") -> str:
         """取第一个非空环境变量；全部为空/未设时返回 default。"""

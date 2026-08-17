@@ -1,0 +1,32 @@
+{
+  "servers": [
+    {
+      "name": "cmdb",
+      "transport": "stdio",
+      "command": ".venv/bin/python",
+      "args": ["scripts/mcp_servers/cmdb_server.py"],
+      "cwd": ".",
+      "env": {"CMDB_DATA": "${CMDB_DATA}"},
+      "client_timeout_seconds": 5,
+      "max_retry_attempts": 1,
+      "call_timeout_seconds": 15,
+      "tools": {
+        "query_asset": {
+          "risk": "low",
+          "roles": ["employee", "operator", "admin"],
+          "description": "查询 CMDB 服务器资产信息（只读）"
+        },
+        "list_network_devices": {
+          "risk": "low",
+          "roles": ["employee", "operator", "admin"],
+          "description": "列出 CMDB 网络设备（只读，可按机架过滤）"
+        },
+        "update_asset_owner": {
+          "risk": "high",
+          "roles": ["operator", "admin"],
+          "description": "变更 CMDB 服务器资产负责人（写操作，高风险需审批）"
+        }
+      }
+    }
+  ]
+}

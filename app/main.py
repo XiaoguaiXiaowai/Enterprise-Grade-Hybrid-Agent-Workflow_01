@@ -11,6 +11,7 @@ from .api import auth as auth_api
 from .api import tickets as tickets_api
 from .api import governance as governance_api
 from .api import kb as kb_api
+from .api import mcp as mcp_api
 from .skills import kb, user_dir, grant  # noqa: F401  确保工具注册到注册表
 
 # 内置知识库种子（演示用；生产可改为外部数据源）
@@ -62,6 +63,12 @@ async def lifespan(app: FastAPI):
         pass
     auth_api.seed_users()
     yield
+    # 关闭阶段：清理 MCP server 连接（防 stdio 子进程泄漏）
+    try:
+        from .mcp import servers as mcp_servers
+        mcp_servers.registry.disconnect_all()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app = FastAPI(title="Enterprise Agent Harness Demo", version="0.1.0-M3", lifespan=lifespan)
@@ -69,6 +76,7 @@ app.include_router(auth_api.router)
 app.include_router(tickets_api.router)
 app.include_router(governance_api.router)
 app.include_router(kb_api.router)
+app.include_router(mcp_api.router)
 
 
 @app.middleware("http")
