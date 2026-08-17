@@ -301,7 +301,6 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
                 log("info", "orchestrator._run_loop", f"agents_runner.run_sdk -- sdk_result={sdk_result}")
             except agents_runner.SdkUnavailable:
                 log_exception()
-                log("info", "orchestrator._run_loop", f"4: {agents_runner.SdkUnavailable}")
                 # OpenRouter+Ollama 均不可用 → 降级传统 LLM 网关（可离线 reader，保持演示/测试）
                 _plan_and_execute(ticket_id, ctx, actor, budget, llm, tools_allowed)
                 log("info", "orchestrator._run_loop", f"except  plan_and_execute")
@@ -338,7 +337,6 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
 
     except _NeedsApproval as na:
         log_exception()
-        log("info", "orchestrator._run_loop", f"8: {na.approval_id}")
         daos.transition(ticket_id, "awaiting_approval", actor, reason="HITL 中断")
         _record_metrics(ticket_id, ticket["intent_type"], human_takeover=True)
         return {"status": "awaiting_approval", "approval_id": na.approval_id,
@@ -346,14 +344,12 @@ def _run_loop(ticket_id: int, actor: str, resume_approval_id=None):
 
     except BudgetExceeded as be:
         log_exception()
-        log("info", "orchestrator._run_loop", f"9: {be.kind}")
         daos.transition(ticket_id, "failed", actor, reason=f"预算触顶: {be.kind}")
         _record_metrics(ticket_id, ticket["intent_type"], success=False, correct_failure=True)
         return {"status": "failed", "reason": f"预算触顶: {be.kind}"}
 
     except Exception as e:  # noqa: BLE001
         log_exception()
-        log("info", "orchestrator._run_loop", f"10: {e}")
         daos.transition(ticket_id, "failed", actor, reason=f"异常: {e}")
         _record_metrics(ticket_id, ticket["intent_type"], success=False)
         return {"status": "failed", "reason": str(e)}

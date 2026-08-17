@@ -126,7 +126,6 @@ def relevance_check(title: str, description: str) -> dict:
                         "source": "llm"}
         except Exception:
             log_exception()
-            log("info", "relevance_check", "LLM 异常")
             pass
 
     # 规则兜底：命中已知 IT 关键词即视为相关；否则放行（宁放过不误拦）
@@ -171,7 +170,6 @@ def followup_relevance_check(ticket_title: str, ticket_desc: str,
                         "reason": data.get("reason", ""), "source": "llm"}
         except Exception:
             log_exception()
-            log("info", "followup_relevance_check", "LLM 异常")
             pass
 
     # 规则兜底：明确的非 IT 闲聊信号 → 不相关；其余一律放行（宁放过不误拦）
@@ -210,7 +208,6 @@ def rewrite_content(title: str, description: str) -> dict:
                         "keywords": data.get("keywords", []), "source": "llm"}
         except Exception as e:
             log_exception()
-            log("info", "rewrite_content", f"LLM 异常：{str(e)}")
             pass
     log("info", "rewrite_content", "兜底")
     return {"summary": text, "keywords": [], "source": "rule"}

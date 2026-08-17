@@ -138,7 +138,6 @@ def _serialize_run_state_for_db(state, run_ctx: dict) -> str:
         return json.dumps(state_json, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         log_exception()
-        log("info", "agents_runner._serialize_run_state_for_db", f"e={e}")
         return ""
 
 
@@ -163,7 +162,6 @@ def _raw_item_to_json(item) -> str:
         }, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         log_exception()
-        log("info", "agents_runner._raw_item_to_json", f"e={e}")
         return ""
 
 
@@ -258,7 +256,6 @@ def run_sdk(ticket_id, ctx, actor, budget, routing, req_id=""):
         log("info", "agents_runner.run_sdk", f"result={result}")
     except Exception as e:
         log_exception()
-        log("info", "agents_runner.run_sdk", f"e={e}")
         if routing["provider"] == "openrouter":
             try:
                 fb_agent = _build_agent_group(routing, actor_role(actor),
