@@ -5,12 +5,19 @@
 - provider="openai"：openai 包，base_url 指向 OpenRouter
 - provider="ollama"：httpx 直连 Ollama 的 /v1/chat/completions
 - provider="reader"（兜底）：离线返回占位 plan，便于无密钥/离线时演示与测试
+- 架构改善阶段1-5：全局并发信号量（AGENT_LLM_CONCURRENCY）+ 单请求超时
+  （AGENT_LLM_TIMEOUT），防止高并发下同时打爆 LLM 上游、雪崩到降级链。
 """
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 
 from .config import settings
 from .tracelog import log_exception
+
+# 全局 LLM 并发闸门：超出并发数的新请求在信号量处排队等待
+_llm_semaphore = threading.BoundedSemaphore(
+    max(1, getattr(settings, "agent_llm_concurrency", 4)))
 
 
 @dataclass
@@ -31,16 +38,22 @@ def build_openai_client(base_url: str | None = None, api_key: str | None = None)
     )
 
 
+def _llm_timeout() -> float:
+    """单请求超时（秒）：AGENT_LLM_TIMEOUT 配置，默认 60。"""
+    return float(getattr(settings, "agent_llm_timeout", 60))
+
+
 def _ollama_chat_raw(messages: list, model: str, base_url: str,
                      temperature: float = settings.llm_temperature) -> dict:
     """httpx 直连 Ollama /v1/chat/completions（Ollama 2.3+ 兼容 OpenAI 协议）。"""
     import httpx
     url = (base_url or settings.ollama_base_url).rstrip("/") + "/chat/completions"
     payload = {"model": model, "messages": messages, "temperature": temperature}
-    with httpx.Client(timeout=120) as client:
-        r = client.post(url, json=payload)
-        r.raise_for_status()
-        return r.json()
+    with _llm_semaphore:
+        with httpx.Client(timeout=_llm_timeout()) as client:
+            r = client.post(url, json=payload)
+            r.raise_for_status()
+            return r.json()
 
 
 def chat_with_fallback(messages: list, primary_model: str, fallback_model: str,
@@ -96,7 +109,9 @@ def _openai_chat(messages: list, model: str, base_url: str | None = None,
     kwargs = {"model": model, "messages": messages, "temperature": temperature}
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
-    resp = client.chat.completions.create(**kwargs)
+    with _llm_semaphore:
+        resp = client.chat.completions.create(
+            **kwargs, timeout=_llm_timeout())
     ms = int((datetime.now() - t0).total_seconds() * 1000)
     usage = resp.usage.model_dump() if resp.usage else {}
     return LLMResult(content=resp.choices[0].message.content or "",

@@ -108,7 +108,11 @@ def _touch(conn, ticket_id):
 
 
 def transition(ticket_id, to, actor, reason=""):
-    """校验合法后修改状态，并写入 ticket_events 审计。返回新状态或抛 InvalidTransition。"""
+    """校验合法后修改状态，并写入 ticket_events 审计。返回新状态或抛 InvalidTransition。
+
+    并发防护（架构改善阶段1-2）：以"期望旧状态"为条件做 UPDATE，若行数=0
+    说明状态已被其他请求并发修改，抛 InvalidTransition 阻止竞态双写。
+    """
     def _apply(conn):
         row = conn.execute("SELECT status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
         if not row:
@@ -116,8 +120,13 @@ def transition(ticket_id, to, actor, reason=""):
         frm = row["status"]
         if not can_transition(frm, to):
             raise InvalidTransition(frm, to)
-        conn.execute("UPDATE tickets SET status = ? WHERE id = ?", (to, ticket_id))
-        _touch(conn, ticket_id)
+        cur = conn.execute(
+            "UPDATE tickets SET status = ?, updated_at = datetime('now') "
+            "WHERE id = ? AND status = ?",
+            (to, ticket_id, frm))
+        if cur.rowcount != 1:
+            # 并发修改：期望旧状态不匹配，阻止竞态双写
+            raise InvalidTransition(frm, to)
         conn.execute(
             "INSERT INTO ticket_events (ticket_id, event_type, payload_json, actor) VALUES (?,?,?,?)",
             (ticket_id, "state_transition",

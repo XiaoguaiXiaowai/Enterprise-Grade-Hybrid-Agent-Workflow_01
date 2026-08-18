@@ -198,8 +198,8 @@ export default function Tickets() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
-  // 活跃工单实时刷新：对话/状态每秒轮询（实时性所需）；列表仅在状态变化或 10s 兜底时刷新，
-  // 避免每轮询都打 count_tickets + list_tickets 造成无谓的接口压力。
+  // 活跃工单实时刷新：对话/状态轮询（架构改善：1s → 2s，降低后端压力）；
+  // 列表仅在状态变化或 10 次轮询（≈20s）兜底时刷新。
   useEffect(() => {
     if (active === null) return;
     let lastStatus: string | null = null;
@@ -218,7 +218,7 @@ export default function Tickets() {
         }
         lastStatus = t2.status;
       } catch { /* ignore */ }
-    }, 1000);
+    }, 2000);
     return () => window.clearInterval(iv);
   }, [active]);
 

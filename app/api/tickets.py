@@ -1,16 +1,16 @@
 """工单路由：CRUD + 触发运行 + 事件/SSE + 对话记录。租户隔离 + RBAC。"""
 import asyncio
 import json
-import threading
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import daos
+from .. import daos as _daos
+from .. import taskqueue
 from ..deps import current_user, require_role
 from ..security import resolve_token
-from .. import daos as _daos
 from ..orchestrator import run_ticket, resume_ticket
 from ..classifier import followup_relevance_check
 from ..config import settings as _settings
@@ -20,16 +20,6 @@ router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
 RISK_LEVELS = {"low", "medium", "high"}
 INTENTS = {"knowledge", "data_query", "change", "troubleshoot"}
-
-# 追加提问并发保护：同一工单同时只能有一个追加回合在跑
-_followup_locks: dict[int, threading.Lock] = {}
-_followup_locks_guard = threading.Lock()
-
-
-def _followup_lock(ticket_id: int) -> threading.Lock:
-    with _followup_locks_guard:
-        return _followup_locks.setdefault(ticket_id, threading.Lock())
-
 
 class TicketIn(BaseModel):
     title: str = Field(min_length=2, max_length=200)
@@ -143,12 +133,22 @@ def get_ticket(ticket_id: int, ctx: dict = Depends(current_user)):
 @router.post("/{ticket_id}/run")
 @trace_call("api.tickets.run")
 def run(ticket_id: int, ctx: dict = Depends(current_user)):
+    """触发 Agent 执行（后台任务化）：校验后入队即返回，Agent 循环由 worker 池执行。
+
+    返回 {"status": "queued"}；进度通过 WS/轮询的事件流观察（前端零改动）。
+    仅 created（新建未跑）状态可触发；处理中/已完成等状态返回 409。
+    """
     row = daos.get_ticket(ticket_id)
     if row is None:
         raise HTTPException(status_code=404, detail="工单不存在")
     _ensure_access(row, ctx)
-    result = run_ticket(ticket_id, actor=ctx["username"])
-    return result
+    if row["status"] != "created":
+        raise HTTPException(status_code=409,
+                            detail="工单当前状态不可触发执行（仅新建后可运行）")
+    if not taskqueue.try_acquire(ticket_id):
+        raise HTTPException(status_code=409, detail="该工单正在处理中，请稍候")
+    taskqueue.submit_ticket_job(ticket_id, run_ticket, ticket_id, actor=ctx["username"])
+    return {"status": "queued"}
 
 
 class FollowupIn(BaseModel):
@@ -184,44 +184,49 @@ def followup(ticket_id: int, body: FollowupIn, ctx: dict = Depends(current_user)
     - 追加内容相关性校验（LLM）：不相关 → 回复拒绝文案，不跑 Agent
     - 相关 → 写入 user_message 事件并触发新一轮 Agent 执行
     """
-    with _followup_lock(ticket_id):
-        row = daos.get_ticket(ticket_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="工单不存在")
-        _ensure_access(row, ctx)
+    row = daos.get_ticket(ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    _ensure_access(row, ctx)
 
-        status = row["status"]
-        if status == "archived":
-            raise HTTPException(status_code=409, detail="工单已关闭，无法追加提问")
-        if status == "done":
-            raise HTTPException(status_code=409, detail="工单已完成，无法追加提问")
-        if status == "awaiting_approval":
-            raise HTTPException(status_code=409, detail="工单正在等待管理者确认，暂不能追加提问")
-        if status in ("created", "triaged", "gathering", "agent_running", "running"):
-            raise HTTPException(status_code=409, detail="工单正在处理中，请稍候再追加")
-        # 其余（pending_confirm / failed）放行
+    status = row["status"]
+    if status == "archived":
+        raise HTTPException(status_code=409, detail="工单已关闭，无法追加提问")
+    if status == "done":
+        raise HTTPException(status_code=409, detail="工单已完成，无法追加提问")
+    if status == "awaiting_approval":
+        raise HTTPException(status_code=409, detail="工单正在等待管理者确认，暂不能追加提问")
+    if status in ("created", "triaged", "gathering", "agent_running", "running"):
+        raise HTTPException(status_code=409, detail="工单正在处理中，请稍候再追加")
+    # 其余（pending_confirm / failed）放行
 
-        # 写入用户消息事件（对话记录 + Agent 历史上下文都会带上）
-        daos.add_event(ticket_id, "user_message",
-                       {"content": body.content}, ctx["username"])
+    # 并发双跑兜底（run/追问/审批统一经 taskqueue 非阻塞锁）
+    if not taskqueue.try_acquire(ticket_id):
+        raise HTTPException(status_code=409, detail="该工单正在处理中，请稍候再追加")
 
-        # 追加内容相关性校验：与当前工单不相关 → 回复拒绝
-        if _settings.input_relevance_check:
-            rel = followup_relevance_check(
-                row["title"], row["description"],
-                _recent_dialogue(ticket_id), body.content)
-            if not rel["relevant"]:
-                reason = rel.get("reason") or ""
-                msg = (f"您追加的内容与当前工单『{row['title']}』不相关，已拒绝处理。"
-                       f"如需其他诉求，请新建工单。")
-                daos.add_event(ticket_id, "reject_followup",
-                               {"reason": reason}, ctx["username"])
-                daos.add_event(ticket_id, "system_message",
-                               {"content": msg}, "system")
-                return {"status": "rejected", "message": msg}
+    # 写入用户消息事件（对话记录 + Agent 历史上下文都会带上）
+    daos.add_event(ticket_id, "user_message",
+                   {"content": body.content}, ctx["username"])
 
-        result = run_ticket(ticket_id, actor=ctx["username"])
-        return {"status": "accepted", "run": result}
+    # 追加内容相关性校验：与当前工单不相关 → 回复拒绝
+    if _settings.input_relevance_check:
+        rel = followup_relevance_check(
+            row["title"], row["description"],
+            _recent_dialogue(ticket_id), body.content)
+        if not rel["relevant"]:
+            reason = rel.get("reason") or ""
+            msg = (f"您追加的内容与当前工单『{row['title']}』不相关，已拒绝处理。"
+                   f"如需其他诉求，请新建工单。")
+            daos.add_event(ticket_id, "reject_followup",
+                           {"reason": reason}, ctx["username"])
+            daos.add_event(ticket_id, "system_message",
+                           {"content": msg}, "system")
+            taskqueue.release(ticket_id)
+            return {"status": "rejected", "message": msg}
+
+    # 后台任务化：Agent 循环入队执行，请求立即返回（进度经 WS/轮询观察）
+    taskqueue.submit_ticket_job(ticket_id, run_ticket, ticket_id, actor=ctx["username"])
+    return {"status": "accepted", "run": {"status": "queued"}}
 
 
 @router.post("/{ticket_id}/confirm")
@@ -386,14 +391,20 @@ def approve(body: ApproveIn, ticket_id: int, ctx: dict = Depends(require_role("o
         raise HTTPException(status_code=400, detail="该审批已被处理")
     if body.decision == "reject":
         _daos.decide_approval(body.approval_id, "rejected", ctx["username"], body.reason)
-        # SDK 原生审批也需恢复 run 以便 Agent 得知被驳回并调整策略
-        result = resume_ticket(ticket_id, body.approval_id,
-                               actor=ctx["username"], decision="reject")
-        return {"status": "rejected", "run": result}
+        # SDK 原生审批也需恢复 run 以便 Agent 得知被驳回并调整策略（后台执行）
+        if not taskqueue.try_acquire(ticket_id):
+            raise HTTPException(status_code=409, detail="该工单正在处理中，请稍候")
+        taskqueue.submit_ticket_job(
+            ticket_id, resume_ticket, ticket_id, body.approval_id,
+            actor=ctx["username"], decision="reject")
+        return {"status": "rejected", "run": {"status": "queued"}}
     _daos.decide_approval(body.approval_id, "approved", ctx["username"], body.reason)
-    result = resume_ticket(ticket_id, body.approval_id,
-                           actor=ctx["username"], decision="approve")
-    return {"decision": "approved", "run": result}
+    if not taskqueue.try_acquire(ticket_id):
+        raise HTTPException(status_code=409, detail="该工单正在处理中，请稍候")
+    taskqueue.submit_ticket_job(
+        ticket_id, resume_ticket, ticket_id, body.approval_id,
+        actor=ctx["username"], decision="approve")
+    return {"decision": "approved", "run": {"status": "queued"}}
 
 
 @router.get("/{ticket_id}/approvals", dependencies=[Depends(current_user)])

@@ -14,6 +14,10 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # 架构改善阶段1-3：写锁等待 5s（降低并发下 database is locked）+ WAL 下
+    # synchronous=NORMAL 保证崩溃一致性的同时减少 fsync 争用，写并发更友好
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 

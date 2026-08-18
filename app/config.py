@@ -44,6 +44,12 @@ class Settings:
     # 函数级调用日志：off | info | debug（见 tracelog.py）
     log_level: str = os.getenv("APP_LOG_LEVEL", "off")
 
+    # ===== 架构改善阶段1：Agent 后台任务执行器 =====
+    # run/追问/审批入队即返回，由 worker 线程池执行（避免同步占用 HTTP 线程）
+    agent_workers: int = int(os.getenv("AGENT_WORKERS", "4"))
+    agent_llm_concurrency: int = int(os.getenv("AGENT_LLM_CONCURRENCY", "4"))
+    agent_llm_timeout: int = int(os.getenv("AGENT_LLM_TIMEOUT", "60"))
+
     # ===== 整改②：LLM 调用参数（魔法数字外部化）=====
     llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0"))
     # 注意：max_tokens 是「含推理 token 的总输出预算」。若主用推理类模型（如 liquid/*）
