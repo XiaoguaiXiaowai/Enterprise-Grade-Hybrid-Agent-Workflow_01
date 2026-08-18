@@ -12,7 +12,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 文档静态校验（docs 整合优化 · 阶段3）：链接 / 路径 / 符号 / 配置键 / 端口 / 映射表。
+  # 校验失败则阻断部署，防止文档与代码脱节（防再滞后机制）。
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 文档静态校验（scripts/check_docs.py）
+        run: python3 scripts/check_docs.py --report tmp/doc_check_report.json
+
+      - name: 上传校验报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-check-report
+          path: tmp/doc_check_report.json
+
   deploy:
+    needs: docs-check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

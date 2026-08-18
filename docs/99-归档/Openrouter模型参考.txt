@@ -1,3 +1,5 @@
+> **历史参考** · OpenRouter 免费模型一览（2026 年收集，价格/可用性以官网为准）。
+
 # --- 免费非推理模型列表 ---
 #    NVIDIA: Nemotron 3.5 Lightning (free)​ — 面向高吞吐量代理工作负载，描述中未提及推理能力。（nvidia/nemotron-3.5-lightning:free）
 #    NVIDIA: Nemotron 3.5 Content Safety (free)​ — 安全护栏/内容审核模型，属分类任务模型，非推理模型。（nvidia/nemotron-3.5-content-safety:free）
