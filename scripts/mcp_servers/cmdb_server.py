@@ -23,8 +23,11 @@ import os
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent.parent
-# 数据文件可由环境变量覆盖（冒烟测试/多环境隔离用）；默认 data/cmdb.json
-DATA_PATH = Path(os.getenv("CMDB_DATA", str(BASE / "data" / "cmdb.json")))
+# 数据文件可由环境变量覆盖（冒烟测试/多环境隔离用）；默认 data/cmdb.json。
+# 注意：`os.getenv(key, default)` 在 key 存在但为**空串**时会返回空串而非 default，
+# 而 Path("") == "."（当前目录）→ _load 会去读目录而报 "Is a directory: '.'"。
+# 因此这里用 `or` 把空串也回退到默认（容器里 ${CMDB_DATA} 未设置展开为空串的场景）。
+DATA_PATH = Path((os.getenv("CMDB_DATA") or str(BASE / "data" / "cmdb.json")))
 
 _SEED = {
     "assets": [

@@ -3,7 +3,10 @@
 自起一个本地 metrics MCP server（streamable_http），以带 Bearer 的客户端连接：
 - 验证远程 server 连接、工具清单过白名单、只读调用、输出脱敏、审计落库
 - 验证 Bearer 鉴权：错误 token 的客户端连接/调用被拒（401）
-- 验证 refresh（热刷新）
+- 验证重建连接（refresh 语义）
+
+不依赖 mcp_servers.json：脚本自行构造 ServerConfig（即使示例配置里删掉 metrics
+也能独立回归远程链路）。
 
 用法：.venv/bin/python scripts/smoke_mcp_http.py
 """
@@ -33,12 +36,30 @@ def _assert(cond, msg):
     print(("PASS  " if cond else "FAIL  ") + msg)
 
 
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+def _make_cfg(headers_override=None):
+    """手工构造 metrics 的 ServerConfig（测试独立于 mcp_servers.json）。"""
+    from app.mcp.config import ServerConfig, ToolMapping
+    return ServerConfig(
+        name="metrics",
+        transport="streamable_http",
+        url=f"http://127.0.0.1:{PORT}/mcp",
+        headers=headers_override or {"Authorization": f"Bearer {TOKEN}"},
+        client_timeout_seconds=5,
+        call_timeout_seconds=15,
+        tools={
+            "list_nodes": ToolMapping(
+                name="list_nodes", risk="low",
+                roles=("employee", "operator", "admin"),
+                description="列出集群节点及健康状态（只读）"),
+            "get_node_load": ToolMapping(
+                name="get_node_load", risk="low",
+                roles=("employee", "operator", "admin"),
+                description="查询指定节点的 CPU/内存负载（只读）",
+                param_schema={"type": "object", "required": ["node"],
+                              "additionalProperties": False,
+                              "properties": {"node": {"type": "string"}}}),
+        },
+    )
 
 
 def _wait_port(port, timeout=25):
@@ -52,18 +73,12 @@ def _wait_port(port, timeout=25):
     return False
 
 
-def _connect_with(headers_override=None):
-    """用给定 headers 覆盖连接到 metrics server；返回 (status_ok, conn 或错误)。"""
-    from app.mcp.config import load_config
-    cfg = load_config()["metrics"]
-    if headers_override is not None:
-        cfg.headers = headers_override
-
-    from app.mcp import servers as mcp_servers
+def _connect_and_use(cfg):
+    """连接并把 conn 注入进程内 registry（供 bridge 使用）。返回 conn。"""
+    from app.mcp import servers as S
     from app.mcp.servers import McpRegistry
-    reg = McpRegistry()
-    # 用新注册表避免进程内既有连接缓存
-    conn = reg._connect(cfg, None)
+    conn = McpRegistry()._connect(cfg, None)
+    S.registry._conns[cfg.name] = conn
     return conn
 
 
@@ -86,24 +101,19 @@ def main():
             return
         _assert(True, "M2 metrics http server 启动（streamable_http）")
 
-        os.environ["METRICS_PORT"] = str(PORT)
-        os.environ["METRICS_MCP_TOKEN"] = TOKEN
-
         # ---- 2) 正常连接（带正确 Bearer）----
-        from app.mcp.config import load_config
-        cfg = load_config()["metrics"]
-        _assert(cfg.headers.get("Authorization") == "Bearer smoke-secret-token"
+        cfg = _make_cfg()
+        _assert(cfg.transport == "streamable_http"
+                and cfg.headers.get("Authorization") == f"Bearer {TOKEN}"
                 and f":{PORT}/mcp" in cfg.url,
-                f"M3 配置 url/headers 经 ${{ENV}} 展开: url={cfg.url} hdr={cfg.headers}")
-        # env 已在 load_config 前设置；registry 惰性读取 → 直接用进程内注册表
+                f"M3 远程 server 配置（url={cfg.url} hdr={cfg.headers}）")
         from app.mcp import servers as S
-        conn = S.registry.get_connection("metrics", refresh=True)
+        conn = _connect_and_use(cfg)
         _assert(conn.healthy, f"M4 远程 server 连接成功（error={conn.error[:80]}）")
         _assert(set(conn.tools) == {"list_nodes", "get_node_load"},
                 f"M5 工具清单过白名单: {sorted(conn.tools)}")
 
         # ---- 3) 调用工具 + 脱敏 + 审计 ----
-        from app import daos
         tid = daos.create_ticket(1, _admin_id(), "查集群负载", "查询 web-node-01 负载",
                                  "low", "knowledge")
         from types import SimpleNamespace
@@ -123,15 +133,15 @@ def main():
                 f"M7 param_schema 参数校验（远程）: {str(r2)[:80]}")
 
         # ---- 4) Bearer 鉴权：错误 token → 连接失败（授权被拒）----
-        bad = _connect_with({"Authorization": "Bearer wrong-token"})
+        bad = _connect_and_use(_make_cfg({"Authorization": "Bearer wrong-token"}))
         # SDK 对 401 的报错形态不定（ExceptionGroup / HTTPStatusError），
         # 关键断言是「错误密钥 → 连接不健康」（服务端鉴权生效）。
         _assert(bad.healthy is False and bad.error,
                 f"M8 错误 Bearer 被拒（连接不健康）: {bad.error[:80]}")
 
-        # ---- 5) refresh 热刷新 ----
-        conn2 = S.registry.get_connection("metrics", refresh=True)
-        _assert(conn2.healthy and "list_nodes" in conn2.tools, "M9 refresh 重连成功")
+        # ---- 5) 重建连接（refresh 语义）----
+        conn2 = _connect_and_use(_make_cfg())
+        _assert(conn2.healthy and "list_nodes" in conn2.tools, "M9 重建连接成功")
 
         S.registry.disconnect_all()
         print(f"\nMCP HTTP SMOKE: {_PASS} passed, {_FAIL} failed")

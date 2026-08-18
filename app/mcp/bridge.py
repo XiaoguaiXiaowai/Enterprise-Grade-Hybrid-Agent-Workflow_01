@@ -100,8 +100,10 @@ def _invoke_mcp(ctx, conn_name: str, tool_name: str, params: dict[str, Any]) -> 
                            RuntimeError(f"MCP 工具不可用: {full_name} ({conn.error or '未连接'})"))
         return {"status": "error", "error": f"MCP 工具不可用: {full_name}"}
 
-    # 1.5) 参数校验（param_schema，映射表 P1 配置）
-    verrs = _check_params(conn_name, tool_name, params)
+    # 1.5) 参数校验（param_schema）：以连接对象的 cfg.tools 映射为事实源
+    #      （运行时携带完整映射，不依赖全局 load_config——server 可来自配置或测试注入）
+    mapping = _mapping_of(conn, tool_name)
+    verrs = validate_params(getattr(mapping, "param_schema", None), params)
     if verrs:
         _record_tool_error(ctx, full_name, RuntimeError(f"参数校验失败: {'；'.join(verrs)}"))
         return {"status": "error", "error": f"参数校验失败: {'；'.join(verrs)}"}
@@ -268,12 +270,11 @@ def _resolve_mapping(server_name: str, tool_name: str):
     return cfg.tools.get(tool_name)
 
 
-def _check_params(server_name: str, tool_name: str, params: dict) -> list[str]:
-    """按映射表 param_schema 校验参数；返回错误列表（空 = 通过）。"""
-    mapping = _resolve_mapping(server_name, tool_name)
-    if mapping is None or not mapping.param_schema:
-        return []
-    return validate_params(mapping.param_schema, params)
+def _mapping_of(conn, tool_name: str):
+    """从连接对象取工具映射（运行时事实源，不依赖全局 load_config）。"""
+    if getattr(conn, "cfg", None) is None:
+        return None
+    return (conn.cfg.tools or {}).get(tool_name)
 
 
 # ===================== 传统降级链路（R4）：register_mcp_proxies =====================
@@ -295,15 +296,17 @@ def _invoke_mcp_proxy(server_name: str, tool_name: str, params: dict) -> dict:
     与本地 registry 工具同约定：成功返回业务 dict（已脱敏），失败返回 {"ok": False, "error"}。
     治理（预算/去重/落库/trace/HITL）由降级链路《_execute_tool》统一承担，此处不重复。
     """
-    verrs = _check_params(server_name, tool_name, params)
-    if verrs:
-        return {"ok": False, "error": f"参数校验失败: {'；'.join(verrs)}"}
     try:
         conn = mcp_servers.registry.get_connection(server_name)
     except mcp_servers.McpUnavailable as e:
         return {"ok": False, "error": f"MCP: {e}"}
     if not conn.healthy or tool_name not in conn.tools:
         return {"ok": False, "error": f"MCP 工具不可用: {server_name}__{tool_name}"}
+    # 参数校验（连接对象的映射为事实源，同 _invoke_mcp）
+    mapping = _mapping_of(conn, tool_name)
+    verrs = validate_params(getattr(mapping, "param_schema", None), params)
+    if verrs:
+        return {"ok": False, "error": f"参数校验失败: {'；'.join(verrs)}"}
     call = mcp_servers.registry.call_tool(conn, tool_name, params)
     if not call.get("ok"):
         return {"ok": False, "error": call.get("error")}

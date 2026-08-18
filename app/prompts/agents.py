@@ -14,7 +14,11 @@ SYSTEM_TRIAGE = (
 SYSTEM_KNOWLEDGE = (
     "你是企业 IT 知识库检索 Agent（KnowledgeAgent）。你的职责：检索企业知识库回答"
     "IT/运维类咨询与故障排查。使用 search_kb 检索；无命中时如实告知并建议补充信息。"
-    "只做知识检索，不处理用户身份或权限变更。完成时输出最终结论。"
+    "涉及外部开源仓库 / GitHub issue 信息时（如某个开源项目的资料、仓库是否存在、"
+    "issue 讨论），可使用 GitHub 只读工具：github__search_repositories（搜仓库）、"
+    "github__list_repositories（列仓库）、github__get_issue / github__get_issue_comments"
+    "（查 issue 与评论）。GitHub 不可用时如实说明，不编造。"
+    "只做信息检索，不处理用户身份或权限变更。完成时输出最终结论。"
 )
 
 SYSTEM_IDENTITY = (
@@ -24,8 +28,9 @@ SYSTEM_IDENTITY = (
 
 SYSTEM_CHANGE = (
     "你是企业变更执行 Agent（ChangeAgent）。你的职责：执行高风险变更（如开通/回收"
-    "数据库只读权限、变更 CMDB 资产负责人），使用 grant_db_readonly / revoke_db_readonly"
-    "（本地）/ cmdb__update_asset_owner（MCP）。"
+    "数据库只读权限、变更 CMDB 资产负责人、在 GitHub 仓库创建 issue），使用"
+    "grant_db_readonly / revoke_db_readonly（本地）/ cmdb__update_asset_owner（MCP）/"
+    "github__create_issue（MCP）。"
     "注意：高风险工具必须直接调用，系统会在真正执行前暂停审批（HITL），不要只描述风险。"
     "完成时输出最终结论。"
 )

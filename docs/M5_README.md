@@ -37,9 +37,13 @@
    SDK 原生审批，保持 HITL 语义单一。`_normalize_tool_params` 对 `**kwargs` 代理工具放行透传。
 
 **P2 —— 生态增强**
-8. **远程 server + 鉴权**（`scripts/mcp_servers/metrics_server.py`）：`streamable_http`
-   传输的独立 HTTP server，带 **Bearer 鉴权**（mcp 2.x 的 TransSec 只防 DNS/CSR，业务
-   鉴权由一层 ASGI 中间件承担）；客户端 `${ENV}` 注入 Authorization 头。
+8. **远程 server + 鉴权**：`streamable_http` 远程链路（`scripts/mcp_servers/metrics_server.py`
+   自起演示 + `scripts/smoke_mcp_http.py` 冒烟）带 **Bearer 鉴权**（mcp 2.x 的 TransSec 只防
+   DNS/CSR，业务鉴权由一层 ASGI 中间件承担）；客户端 `${ENV}` 注入 Authorization 头。
+   **公共 server 示例**：`mcp_servers.json` 内置 GitHub 官方 MCP server
+   （`https://api.githubcopilot.com/mcp/`，Bearer 用 `GITHUB_MCP_TOKEN`），
+   映射表只放行声明的 5 个工具（search_repositories / list_repositories / get_issue /
+   get_issue_comments 只读 + create_issue 写操作→HITL）。
 9. **热刷新**：`POST /api/mcp/servers/{name}/refresh` 重建连接并重拉工具清单（含重新读配置）。
 10. **前端「MCP 工具面」**（`web/app/mcp/page.tsx`）：一屏展示各 server 状态 / transport /
    已发现工具 / 映射后的 risk·roles·param_schema·描述，支持 连接 / 断开（故障演练）／
@@ -92,15 +96,16 @@ pip install -r requirements.txt    # 含 mcp==2.0.0（mcp 2.x，openai-agents 0.
 . .venv/bin/activate
 # ① 确定性冒烟（推荐，必过）：不依赖真模型，覆盖连接/白名单/治理/审计/脱敏/重连
 python scripts/smoke_mcp_core.py
-# ② 远程 streamable_http + Bearer 鉴权冒烟（P2）：自起 metrics server 验证远程链路
+# ② 远程 streamable_http + Bearer 鉴权冒烟（P2）：脚本自起 metrics server 验证远程链路
 python scripts/smoke_mcp_http.py
 # ③ 真模型端到端（可选）：需可访问 openrouter.ai；真模型有随机性，高风险场景可能需重试
 python scripts/smoke_mcp.py
 ```
 
 > ② 会自动在本机拉起 `metrics_server.py`（streamable_http + Bearer）并做鉴权/调用/刷新断言，
-> 无需手工启动。若要在真实服务里体验远程链路，可先 `METRICS_PORT=8766 METRICS_MCP_TOKEN=xxx \
-> .venv/bin/python scripts/mcp_servers/metrics_server.py` 再经由「MCP 工具面」页面连接。
+> 无需手工启动、也**不依赖 mcp_servers.json 里的任何配置**（脚本自造 ServerConfig）。
+> 公共 GitHub server：`mcp_servers.json` 已内置，只需在 `.env` 填 `GITHUB_MCP_TOKEN`（PAT，
+> 见 .env.example 注释）重启后端，再到「MCP 工具面」页面点 github 的「连接」。
 
 冒烟断言（core，22 项）：
 1. 装配白名单：employee 只装只读 `cmdb__query_asset`；operator 全有；未映射/角色不符拒绝

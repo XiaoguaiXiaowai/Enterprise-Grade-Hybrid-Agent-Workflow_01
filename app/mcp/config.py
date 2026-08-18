@@ -171,7 +171,10 @@ def _validate_server(raw: dict[str, Any]) -> ServerConfig:
             raise McpConfigError(f"[{name}] stdio command 不允许跨目录: {cfg.command}")
         cfg.args = [str(a) for a in (raw.get("args") or [])]
         cfg.cwd = str(raw.get("cwd") or ".")
-        cfg.env = {str(k): str(v) for k, v in (raw.get("env") or {}).items()}
+        # 传给子进程的 env：剔除展开后为空的键——`${VAR}` 未设置时会展开成空串，
+        # 若照传会造成歧义（如 cmdb_server 把空 CMDB_DATA 当 "." 读目录）。
+        cfg.env = {str(k): str(v) for k, v in (raw.get("env") or {}).items()
+                   if str(v) != ""}
     elif transport in ("streamable_http", "sse"):
         cfg.url = str(raw.get("url", "")).strip()
         if not cfg.url:

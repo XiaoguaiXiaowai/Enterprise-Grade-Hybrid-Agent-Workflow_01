@@ -28,6 +28,11 @@ CHANGE_TOOLS = ["grant_db_readonly", "revoke_db_readonly"]
 # M5：MCP 外部工具（{server}__{tool} 命名；权限/风险由 app/mcp/config.py 映射表决定）
 CMDB_TOOLS = ["cmdb__query_asset", "cmdb__list_network_devices",
               "cmdb__update_asset_owner"]
+# M5-P2：GitHub 公共 MCP server——只读查询挂 KnowledgeAgent（外部信息检索），
+# 写操作 create_issue 挂 ChangeAgent（高风险 → HITL 审批）
+GITHUB_READ_TOOLS = ["github__search_repositories", "github__list_repositories",
+                     "github__get_issue", "github__get_issue_comments"]
+GITHUB_WRITE_TOOLS = ["github__create_issue"]
 
 
 def build_agent_group(role: str, model_fn):
@@ -41,11 +46,13 @@ def build_agent_group(role: str, model_fn):
     id_tools = at.build_agent_tools(role, IDENTITY_TOOLS)
     ch_tools = at.build_agent_tools(role, CHANGE_TOOLS)
     cmdb_tools = at.build_mcp_tools(role, CMDB_TOOLS)   # M5：MCP 工具同样走治理
+    github_ro = at.build_mcp_tools(role, GITHUB_READ_TOOLS)     # M5-P2：GitHub 只读
+    github_wo = at.build_mcp_tools(role, GITHUB_WRITE_TOOLS)    # M5-P2：GitHub 写（HITL）
 
     knowledge_agent = Agent(
         name="KnowledgeAgent",
         instructions=_SYSTEM_KNOWLEDGE,
-        tools=kb_tools,
+        tools=kb_tools + github_ro,
         model=model_fn("knowledge"),
     )
     identity_agent = Agent(
@@ -57,7 +64,7 @@ def build_agent_group(role: str, model_fn):
     change_agent = Agent(
         name="ChangeAgent",
         instructions=_SYSTEM_CHANGE,
-        tools=ch_tools,
+        tools=ch_tools + github_wo,
         model=model_fn("change"),
     )
     cmdb_agent = Agent(

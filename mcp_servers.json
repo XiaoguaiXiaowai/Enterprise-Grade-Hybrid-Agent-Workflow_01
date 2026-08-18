@@ -54,28 +54,37 @@
       }
     },
     {
-      "name": "metrics",
+      "name": "github",
       "transport": "streamable_http",
-      "url": "http://127.0.0.1:${METRICS_PORT}/mcp",
-      "headers": {"Authorization": "Bearer ${METRICS_MCP_TOKEN}"},
-      "client_timeout_seconds": 5,
-      "call_timeout_seconds": 15,
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"},
+      "client_timeout_seconds": 10,
+      "call_timeout_seconds": 30,
       "tools": {
-        "list_nodes": {
+        "search_repositories": {
           "risk": "low",
           "roles": ["employee", "operator", "admin"],
-          "description": "列出集群节点及健康状态（只读，远程 HTTP server）"
+          "description": "在 GitHub 上按关键词搜索仓库（只读）"
         },
-        "get_node_load": {
+        "list_repositories": {
           "risk": "low",
           "roles": ["employee", "operator", "admin"],
-          "description": "查询指定节点的 CPU/内存负载（只读，远程 HTTP server）",
-          "param_schema": {
-            "type": "object",
-            "required": ["node"],
-            "additionalProperties": false,
-            "properties": {"node": {"type": "string"}}
-          }
+          "description": "列出当前登录用户可见的仓库（只读）"
+        },
+        "get_issue": {
+          "risk": "low",
+          "roles": ["employee", "operator", "admin"],
+          "description": "查询指定 issue 的详情（只读）"
+        },
+        "get_issue_comments": {
+          "risk": "low",
+          "roles": ["employee", "operator", "admin"],
+          "description": "查询指定 issue 的评论列表（只读）"
+        },
+        "create_issue": {
+          "risk": "high",
+          "roles": ["operator", "admin"],
+          "description": "在仓库中创建 issue（写操作，需审批）"
         }
       }
     }

@@ -43,16 +43,46 @@ def _rule_classify(text: str) -> tuple[str, str]:
 
 
 def _parse_json(text: str) -> dict | None:
+    """从 LLM 输出中提取 JSON 对象（容忍思考文本 / 代码围栏 / 前后缀）。
+
+    兼容形态：
+    - 纯 JSON（非推理模型常规输出）
+    - ```json ... ``` 代码围栏
+    - 输出前后附带说明文字
+    - 推理模型把思考过程混入 content，且思考段内夹带 JSON 示例
+      （如 {"relevant": true/false, ...}）——不能简单贪婪取第一个 {…}，
+      否则示例+思考+真实答案拼成一个非法串导致解析失败。
+    策略：剥围栏 → 整体解析 → 贪婪取 {…} 块 → 逐块扫描取首个可解析的 dict。
+    """
     if not text:
         return None
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        return None
+    t = re.sub(r"```(?:json)?\s*", "", text)
+    t = re.sub(r"\s*```", "", t)
+    # 1) 整体就是合法 JSON（最常见，含嵌套也安全）
     try:
-        return json.loads(m.group(0))
+        d = json.loads(t)
+        if isinstance(d, dict):
+            return d
     except Exception:
-        log_exception()
-        return None
+        pass
+    # 2) 贪婪取第一个 { 到最后一个 }（简单前后缀场景，嵌套对象也能整体解析）
+    m = re.search(r"\{.*\}", t, re.S)
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    # 3) 思考文本夹带示例的场景：逐块扫描，返回首个可解析且为 dict 的块
+    for cand in re.findall(r"\{[^{}]*\}", t, re.S):
+        try:
+            d = json.loads(cand)
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            continue
+    return None
 
 def classify(title: str = "", description: str = "", rewritten: str | None = None) -> dict:
     """返回 {intent_type, risk_level, source, reason}。source: llm | rule

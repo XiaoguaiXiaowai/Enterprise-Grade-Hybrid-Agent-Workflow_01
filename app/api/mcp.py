@@ -14,6 +14,18 @@ from ..tracelog import trace_call, log_exception
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 
+def _remote_hint(name: str) -> str:
+    """远程 server 连接失败的提示（区分「需独立启动」与 stdio 自动拉起）。"""
+    raw = mcp_servers.registry.list_server_configs()
+    entry = next((r for r in raw if r["name"] == name), None)
+    if entry and entry.get("transport") in ("streamable_http", "sse"):
+        return ("（该 server 是远程服务，不会由本应用拉起——需先独立启动，"
+                "如：METRICS_PORT=8766 METRICS_MCP_TOKEN=<token> "
+                "python scripts/mcp_servers/metrics_server.py，"
+                "并确认 .env 的 METRICS_PORT 与之一致）")
+    return ""
+
+
 @router.get("/servers")
 @trace_call("api.mcp.servers")
 def servers(ctx: dict = Depends(require_role("operator", "admin"))):
@@ -55,7 +67,8 @@ def connect(name: str, ctx: dict = Depends(require_role("operator", "admin"))):
         log_exception()
         raise HTTPException(status_code=404, detail=str(e))
     if not conn.healthy:
-        raise HTTPException(status_code=502, detail=f"连接失败: {conn.error}")
+        raise HTTPException(status_code=502,
+                            detail=f"连接失败: {conn.error}{_remote_hint(name)}")
     return {"name": name, "healthy": True, "tools": sorted(conn.tools)}
 
 
