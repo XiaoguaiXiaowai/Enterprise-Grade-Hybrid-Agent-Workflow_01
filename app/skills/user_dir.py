@@ -7,10 +7,12 @@
 from ..db import session
 from .registry import register_tool
 from .masker import mask_principal
+from ..tracelog import trace_call
 
 
 @register_tool(name="query_user_dir", risk="medium",
                description="查询用户目录中的用户信息与权限（只读，返回脱敏）。")
+@trace_call("tool.user_dir.query_user_dir")
 def query_user_dir(principal: str) -> dict:
     if not principal:
         return {"found": False, "principal": ""}

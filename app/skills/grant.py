@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from ..db import session
 from .registry import register_tool
 from .masker import mask_principal
+from ..tracelog import trace_call
 
 # 授权有效期（天），可被环境变量覆盖（配置化，整改②风格）
 GRANT_TTL_DAYS = 30
@@ -31,6 +32,7 @@ def _active_grant(conn, principal: str, grant_type: str):
 
 @register_tool(name="grant_db_readonly", risk="high", roles=("operator", "admin"),
                description="为指定用户开通数据库只读账号（高风险，需审批）。")
+@trace_call("tool.grant.grant_db_readonly")
 def grant_db_readonly(principal: str, grant_type: str = "readonly") -> dict:
     grant_type = grant_type.lower()
     if grant_type not in {"readonly", "readwrite"}:
@@ -55,6 +57,7 @@ def grant_db_readonly(principal: str, grant_type: str = "readonly") -> dict:
 
 @register_tool(name="revoke_db_readonly", risk="high", roles=("operator", "admin"),
                description="回收数据库只读权限（补偿动作，需审批）。")
+@trace_call("tool.grant.revoke_db_readonly")
 def revoke_db_readonly(principal: str) -> dict:
     with session() as conn:
         _lazy_expire(conn)
