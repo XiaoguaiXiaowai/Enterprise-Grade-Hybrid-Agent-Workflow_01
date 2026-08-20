@@ -1,0 +1,500 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "企业级混合 Agent 工作流 · 系统架构",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1300,
+      743
+    ],
+    "repository": {
+      "url": "https://github.com/XiaoguaiXiaowai/Enterprise-Grade-Hybrid-Agent-Workflow_01.git",
+      "revision": "d161af0584e401b0ad3ae693d79d7b9cfd08ecf3"
+    }
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "员工 / 审批人",
+      "sublabel": "建单 · 追问 · 审批 · 看板",
+      "pos": [
+        40,
+        90
+      ],
+      "size": [
+        150,
+        90
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Next.js 前端",
+      "sublabel": "工单台 · 审批台 · Trace 回放 · 指标看板",
+      "pos": [
+        330,
+        90
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "web/app/page.tsx"
+        },
+        {
+          "path": "web/app/approve/page.tsx"
+        }
+      ]
+    },
+    {
+      "id": "entry",
+      "type": "backend",
+      "label": "FastAPI 入口层",
+      "sublabel": "鉴权 · RBAC · 工单 API · WS 实时推送",
+      "pos": [
+        330,
+        250
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/api/tickets.py",
+          "label": "run / approve / ws_events"
+        },
+        {
+          "path": "app/security.py",
+          "label": "会话与 RBAC"
+        }
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "后台任务队列",
+      "sublabel": "taskqueue · 入队即返回 · 每工单互斥锁",
+      "pos": [
+        40,
+        420
+      ],
+      "size": [
+        150,
+        80
+      ],
+      "sources": [
+        {
+          "path": "app/taskqueue.py",
+          "label": "submit_ticket_job"
+        }
+      ]
+    },
+    {
+      "id": "orch",
+      "type": "backend",
+      "label": "编排器",
+      "sublabel": "入口流水线 · LOOP 调度 · HITL 恢复",
+      "pos": [
+        480,
+        420
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/orchestrator.py",
+          "label": "run_ticket / resume_ticket"
+        },
+        {
+          "path": "app/classifier.py",
+          "label": "相关性 / 重写 / 分级"
+        }
+      ]
+    },
+    {
+      "id": "sdk",
+      "type": "backend",
+      "label": "智能层",
+      "sublabel": "OpenAI Agents SDK · Triage → 5 子 Agent handoff",
+      "pos": [
+        760,
+        420
+      ],
+      "size": [
+        180,
+        100
+      ],
+      "sources": [
+        {
+          "path": "app/agents_runner.py",
+          "label": "run_sdk / resume_run"
+        },
+        {
+          "path": "app/agents_defs.py",
+          "label": "build_agent_group"
+        }
+      ]
+    },
+    {
+      "id": "models",
+      "type": "cloud",
+      "label": "模型层",
+      "sublabel": "OpenRouter ⇄ Ollama ⇄ 离线 reader",
+      "pos": [
+        1040,
+        420
+      ],
+      "size": [
+        160,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/model_router.py",
+          "label": "route"
+        },
+        {
+          "path": "app/llm_gateway.py",
+          "label": "chat_with_fallback"
+        }
+      ]
+    },
+    {
+      "id": "gov",
+      "type": "security",
+      "label": "治理横切",
+      "sublabel": "状态机 · 三重预算 · 守卫 · Trace/指标落库",
+      "pos": [
+        40,
+        600
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/state_machine.py",
+          "label": "can_transition"
+        },
+        {
+          "path": "app/budget.py",
+          "label": "Budget"
+        },
+        {
+          "path": "app/trace.py",
+          "label": "write"
+        }
+      ]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "SQLite 主存储",
+      "sublabel": "工单 · 事件 · 审批 · 记忆",
+      "pos": [
+        290,
+        600
+      ],
+      "size": [
+        160,
+        110
+      ],
+      "sources": [
+        {
+          "path": "app/db.py"
+        },
+        {
+          "path": "app/daos/tickets.py"
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "工具层",
+      "sublabel": "注册即白名单 · RBAC · 脱敏 · 幂等",
+      "pos": [
+        540,
+        600
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/skills/registry.py",
+          "label": "register_tool"
+        },
+        {
+          "path": "app/agents_tools.py",
+          "label": "build_agent_tools"
+        }
+      ]
+    },
+    {
+      "id": "kb",
+      "type": "database",
+      "label": "知识库 RAG",
+      "sublabel": "LanceDB 向量 + FTS5 双路召回 + rerank",
+      "pos": [
+        790,
+        600
+      ],
+      "size": [
+        160,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/vector_kb.py"
+        },
+        {
+          "path": "app/rerank.py"
+        }
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "external",
+      "label": "MCP 外部工具",
+      "sublabel": "cmdb · github · metrics",
+      "pos": [
+        1060,
+        600
+      ],
+      "size": [
+        160,
+        90
+      ],
+      "sources": [
+        {
+          "path": "app/mcp/bridge.py",
+          "label": "_invoke_mcp"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "① 客户端 · Next.js SPA",
+      "wraps": [
+        "users",
+        "web"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "② 入口层 · FastAPI + Nginx",
+      "wraps": [
+        "entry"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "③ Agent Harness 内核 · 编排与智能",
+      "wraps": [
+        "queue",
+        "orch",
+        "sdk"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "④ 工具与数据面 · 本地零成本",
+      "wraps": [
+        "sqlite",
+        "tools",
+        "kb"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "⑤ 模型层 · 三级降级",
+      "wraps": [
+        "models"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "治理横切 · 状态机 / 预算 / 守卫 / Trace",
+      "wraps": [
+        "gov"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "users-web",
+      "from": "users",
+      "to": "web",
+      "label": "建单 · 追问 · 审批 · 确认",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "web-entry",
+      "from": "web",
+      "to": "entry",
+      "label": "REST / JSON",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        415,
+        194
+      ]
+    },
+    {
+      "id": "entry-web",
+      "from": "entry",
+      "to": "web",
+      "label": "WS 事件推送",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "entry-queue",
+      "from": "entry",
+      "to": "queue",
+      "label": "POST /run · 入队即返回 queued",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "queue-orch",
+      "from": "queue",
+      "to": "orch",
+      "label": "worker 执行 run_ticket",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        214,
+        514
+      ]
+    },
+    {
+      "id": "orch-sdk",
+      "from": "orch",
+      "to": "sdk",
+      "label": "run_sdk / resume_run · HITL 恢复",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        674,
+        524
+      ]
+    },
+    {
+      "id": "sdk-models",
+      "from": "sdk",
+      "to": "models",
+      "label": "Chat Completions · 意图/风险路由",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        964,
+        534
+      ]
+    },
+    {
+      "id": "sdk-tools",
+      "from": "sdk",
+      "to": "tools",
+      "label": "工具调用 · 白名单/脱敏/幂等",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "orch-sqlite",
+      "from": "orch",
+      "to": "sqlite",
+      "label": "状态/事件/审批/RunState",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "tools-sqlite",
+      "from": "tools",
+      "to": "sqlite",
+      "label": "tool_calls · grants 审计",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelAt": [
+        516,
+        704
+      ]
+    },
+    {
+      "id": "tools-kb",
+      "from": "tools",
+      "to": "kb",
+      "label": "search_kb · 双路召回 + rerank",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        750,
+        704
+      ]
+    },
+    {
+      "id": "tools-mcp",
+      "from": "tools",
+      "to": "mcp",
+      "label": "JSON-RPC 2.0 · stdio / HTTP",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "gov-sqlite",
+      "from": "gov",
+      "to": "sqlite",
+      "label": "traces · metrics 落库",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        214,
+        704
+      ]
+    },
+    {
+      "id": "gov-orch",
+      "from": "gov",
+      "to": "orch",
+      "label": "治理约束",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "主链路",
+      "items": [
+        "建单秒回 → POST /run 入队即返回 queued → worker 执行入口流水线（相关性校验 / 内容重写 / 意图风险分级）",
+        "SDK 计划-工具循环：Triage → 子 Agent handoff，工具调用逐项过白名单与治理核查；高风险触发 HITL 中断，审批通过后 RunState 跨进程恢复",
+        "回合收敛进入 pending_confirm，客户确认后才 done —— 终态由人确认，不由模型自封；全程经 WebSocket 事件流推送"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "数据与治理",
+      "items": [
+        "SQLite(WAL) 主存储：工单 / 事件 / 审批 / 记忆 / Trace / 指标；RAG 双路召回 + RRF + rerank（recall@1 0.938 → 1.000）",
+        "MCP 工具面：配置即白名单（mcp_servers.json），未声明 = 拒绝，调用不绕过治理；连接外置，治理不外包",
+        "状态机防跳步（乐观锁）· 三重预算（步数/Token/时间）· 幂等守卫 · Trace 全链路可回放"
+      ]
+    }
+  ]
+}
