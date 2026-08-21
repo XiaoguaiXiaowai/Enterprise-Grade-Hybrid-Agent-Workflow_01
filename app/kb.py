@@ -113,30 +113,32 @@ def _resolve_top_k(top_k: int | None) -> int:
 
 
 def search(query: str, top_k: int | None = None, tag: str | None = None) -> list[dict]:
-    """混合检索：查询改写(可选) → 向量 + 关键词两路召回 → RRF 融合 → rerank 精排。
+    """混合检索：多路召回（单/多 query 变体）→ 向量 + 关键词两路 → RRF 融合 → rerank 精排。
 
     - 中文场景 FTS5 MATCH 常为空串，故关键词路对中文用 2-gram LIKE 兜底。
+    - 多路召回（RAG_MULTI_QUERY_ENABLED，默认关）：同一问题生成多个 query 变体
+      （原句/改写/关键词/子问题）并行走两路召回再合并，扩大检索覆盖面。
     - 向量不可用时退化为纯关键词路；rerank 不可用时保持融合顺序。
     - tag 非空时两路都按 tag 过滤（企业多业务线隔离）。
     """
     top_k = _resolve_top_k(top_k)
-    # ② LLM 查询改写（默认关；开启后改写失败自动回落原文）
-    q = rerank.rewrite_query(query)
+    # ② 生成检索 query：单路=改写后的原句；多路=多个变体并行
+    queries = rerank.build_query_variants(query)
 
     # rerank 开启时放大召回候选，精排后取 top_k
     recall_k = top_k * settings.rerank_recall_factor if settings.rerank_enabled else top_k
 
-    vec = _vector_hits(q, recall_k, tag)
-    kw = _keyword_hits(q, recall_k, tag)
-    if vec:
-        merged = _rrf_merge(q, vec, kw, recall_k)
-    else:
-        merged = kw or []
+    all_vec: list[dict] = []
+    all_kw: list[dict] = []
+    for q in queries:
+        all_vec += _vector_hits(q, recall_k, tag)
+        all_kw += _keyword_hits(q, recall_k, tag)
+    merged = _rrf_merge(query, all_vec, all_kw, recall_k) if all_vec else (all_kw or [])
     if not merged:
         return []
     # ③ rerank 精排（OpenRouter 主 / Ollama 兜底 / 降级跳过）
     if settings.rerank_enabled and len(merged) > 1:
-        merged, _ = rerank.rerank(q, merged, top_k)
+        merged, _ = rerank.rerank(query, merged, top_k)
     return merged[:top_k]
 
 
@@ -185,8 +187,11 @@ def _rrf_merge(query: str, vec: list[dict], fts: list[dict], top_k: int) -> list
                 "content": body,
                 "parent": r.get("parent", ""),
                 "path": r.get("path", ""),
+                "context": r.get("context", ""),   # ④ 上下文窗口扩展透传
                 "score": 0.0, "_order": len(by_title),
             })
+            if r.get("context"):
+                entry["context"] = r["context"]
             entry["score"] += weight / (_RRF_K + rank)
 
     add(vec, weight=w_vec)

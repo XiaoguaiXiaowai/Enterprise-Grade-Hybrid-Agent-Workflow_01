@@ -101,6 +101,23 @@ class Settings:
     return_parent_chunk: bool = os.getenv(
         "RAG_RETURN_PARENT", "false").lower() in ("1", "true", "yes", "on")
 
+    # ===== RAG 检索增强（整改⑧-续）：上下文窗口 / 多路召回 / 模糊追问 =====
+    # ④ 上下文窗口扩展：命中块前后各拼接 N 个邻居块（0=关，保持现状单块返回）
+    rag_context_window: int = int(os.getenv("RAG_CONTEXT_WINDOW", "1"))
+    # ② 多路召回（多 query 变体并行）：默认关（与 query_rewrite 同成本考量）
+    rag_multi_query_enabled: bool = os.getenv(
+        "RAG_MULTI_QUERY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    # ② 多路召回中是否启用 LLM 拆分子问题（额外调用，仅多路开启时有意义）
+    rag_multi_query_subsplit: bool = os.getenv(
+        "RAG_MULTI_QUERY_SUBSPLIT", "false").lower() in ("1", "true", "yes", "on")
+    # ② 多路召回 query 变体数量上限（防变体爆炸）
+    rag_multi_query_max_variants: int = int(os.getenv("RAG_MULTI_QUERY_MAX_VARIANTS", "4"))
+    # ① 模糊追问：top1 命中置信度（rerank 分数）低于此值 → 触发澄清信号；0=关闭模糊判定
+    rag_clarify_threshold: float = float(os.getenv("RAG_CLARIFY_THRESHOLD", "0.05"))
+    # ① 澄清信号总开关
+    rag_clarify_enabled: bool = os.getenv(
+        "RAG_CLARIFY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
     # 向量知识库（本地 RAG）：主用 OpenRouter embedding，兜底 Ollama bge-m3，LanceDB 存向量
     vector_db_path: str = os.getenv("VECTOR_DB_PATH", "data/vector-kb")
     # 主用 embedding（OpenRouter）：默认 nvidia/nemotron-3-embed-1b:free，端点独立可配

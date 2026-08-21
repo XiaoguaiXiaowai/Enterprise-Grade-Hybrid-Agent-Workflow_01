@@ -227,7 +227,9 @@ def _check_dim(vecs: list[list[float]], where: str) -> None:
 def _build_rows(docs: list[dict], start_idx: int = 0) -> list[dict]:
     """把文档切块并构建记录（不 embedding，供调用方批量扩维后写入）。
 
-    small-to-big：内容存子块，另存 parent 父块文本与 path 结构路径。
+    small-to-big：内容存子块，另存 parent 父块文本与 path 结构路径；
+    上下文窗口（整改⑧-续）：每块记录 doc_key（文档键，取 title）与 doc_idx
+    （文档内块顺序号），检索命中后可据此定位前后邻居块拼接完整上下文。
     """
     rows: list[dict] = []
     idx = start_idx
@@ -240,19 +242,22 @@ def _build_rows(docs: list[dict], start_idx: int = 0) -> list[dict]:
         paths = _heading_paths(content)
         if not children:
             continue
+        doc_key = d.get("title", "") or str(id(d))
         # 子块 → 父块归属：按字符偏移贪心匹配（父块按顺序累计）
-        for child in children:
+        for doc_i, child in enumerate(children):
             idx += 1
             # 找第一个覆盖该子块起始位置的父块（用子块在全文中的近似偏移）
             off = content.find(child[:30])
             parent = _pick_parent(parents, content, child, off)
             rows.append({
-                "id": f"{d.get('title','')}::{idx}",
-                "title": d.get("title", ""),
+                "id": f"{doc_key}::{idx}",
+                "title": doc_key,
                 "tag": d.get("tag", "doc"),
                 "content": child,
                 "parent": parent,
                 "path": _chunk_path(off if off >= 0 else 0, paths),
+                "doc_key": doc_key,
+                "doc_idx": doc_i,
             })
     return rows
 
@@ -362,7 +367,8 @@ def search(query: str, top_k: int | None = None, tag: str | None = None) -> list
     """语义检索：query embedding → 近似最近邻（余弦，向量已归一化）。
 
     - tag 非空时按 tag 元数据过滤（LB 的 where 预过滤）。
-    - 返回元素含 title/tag/content/parent/path/score。
+    - 返回元素含 title/tag/content/parent/path/score；
+      若开启上下文窗口（RAG_CONTEXT_WINDOW>0），额外含 context（命中块+前后邻居拼接）。
     - 不可用/异常返回空列表，由上层回退关键词检索。
     """
     if top_k is None:
@@ -377,15 +383,49 @@ def search(query: str, top_k: int | None = None, tag: str | None = None) -> list
         if tag:
             q = q.where(f"tag = '{_sql_escape(tag)}'", prefilter=True)
         hits = q.to_list()
-        return [{
-            "title": h["title"],
-            "tag": h.get("tag", ""),
-            "content": h["content"],
-            "parent": h.get("parent", ""),
-            "path": h.get("path", ""),
-            "score": round(float(h.get("_distance", 0.0)), 4),
-        } for h in hits]
+        # ④ 上下文窗口：命中块周围邻居缓存（按 doc_key 分组，一次拉取复用）
+        w = settings.rag_context_window
+        neighbor_map: dict[str, list[dict]] = {}
+        out = []
+        for h in hits:
+            item = {
+                "title": h["title"],
+                "tag": h.get("tag", ""),
+                "content": h["content"],
+                "parent": h.get("parent", ""),
+                "path": h.get("path", ""),
+                "score": round(float(h.get("_distance", 0.0)), 4),
+            }
+            if w > 0 and h.get("doc_key"):
+                if h["doc_key"] not in neighbor_map:
+                    neighbor_map[h["doc_key"]] = _doc_neighbors(tbl, h["doc_key"])
+                item["context"] = _join_context(
+                    neighbor_map[h["doc_key"]], int(h.get("doc_idx", 0)), w)
+            out.append(item)
+        return out
     except Exception as e:  # noqa: BLE001
         log_exception()
         logger.warning("向量检索异常，回退关键词: %s", e)
         return []
+
+
+def _doc_neighbors(tbl, doc_key: str) -> list[dict]:
+    """拉取同文档全部块（按 doc_idx 升序），供上下文窗口拼接复用。库小可一次读。"""
+    try:
+        rows = tbl.to_arrow().to_pylist()
+        same = [r for r in rows if r.get("doc_key") == doc_key]
+        same.sort(key=lambda r: int(r.get("doc_idx", 0)))
+        return same
+    except Exception as e:  # noqa: BLE001
+        log_exception()
+        logger.warning("上下文窗口邻居读取失败: %s", e)
+        return []
+
+
+def _join_context(blocks: list[dict], idx: int, window: int) -> str:
+    """把命中块与其前/后 window 个邻居按顺序拼接为完整上下文文本。"""
+    if not blocks:
+        return ""
+    pos = {int(b.get("doc_idx", 0)): b.get("content", "") for b in blocks}
+    parts = [pos.get(i, "") for i in range(idx - window, idx + window + 1)]
+    return "\n\n".join(p for p in parts if p)

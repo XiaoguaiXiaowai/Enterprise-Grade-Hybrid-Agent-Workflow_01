@@ -91,7 +91,8 @@ def eval_once(label: str = "cfg") -> dict:
     }
 
 
-def apply_overrides(rerank=None, rewrite=None, adaptive=None, parent=None) -> None:
+def apply_overrides(rerank=None, rewrite=None, adaptive=None, parent=None,
+                    multi=None, window=None) -> None:
     """把开关覆盖到 settings 单例（各模块持有同一引用，可视化生效）。"""
     def _b(v):
         return v in ("on", "true", "1", True)
@@ -103,6 +104,10 @@ def apply_overrides(rerank=None, rewrite=None, adaptive=None, parent=None) -> No
         cfg_mod.settings.adaptive_rerank_weight = _b(adaptive)
     if parent is not None:
         cfg_mod.settings.return_parent_chunk = _b(parent)
+    if multi is not None:
+        cfg_mod.settings.rag_multi_query_enabled = _b(multi)
+    if window is not None:
+        cfg_mod.settings.rag_context_window = int(window)
 
 
 def _print_table(results: list[dict]) -> None:
@@ -134,21 +139,37 @@ def main() -> None:
     p.add_argument("--rewrite", choices=["on", "off"], help="query 改写开关")
     p.add_argument("--adaptive", choices=["on", "off"], help="自适应加权开关")
     p.add_argument("--parent", choices=["on", "off"], help="返回父块上下文开关")
+    p.add_argument("--multi", choices=["on", "off"], help="多路召回开关")
+    p.add_argument("--window", type=int, help="上下文窗口大小（0=关）")
     p.add_argument("--compare", action="store_true", help="对比 rerank on/off 两轮")
     p.add_argument("--detail", action="store_true", help="打印命中明细")
     args = p.parse_args()
 
     if args.compare:
-        apply_overrides(rerank="off", rewrite=args.rewrite, adaptive=args.adaptive)
+        apply_overrides(rerank="off", rewrite=args.rewrite, adaptive=args.adaptive,
+                        multi=args.multi, window=args.window)
         base = eval_once("rerank=off")
-        apply_overrides(rerank="on", rewrite=args.rewrite, adaptive=args.adaptive)
+        apply_overrides(rerank="on", rewrite=args.rewrite, adaptive=args.adaptive,
+                        multi=args.multi, window=args.window)
         on = eval_once("rerank=on")
         print("\n=== RAG 评测：rerank 开关对比 ===")
         _print_table([base, on])
         return
 
+    if args.multi:
+        apply_overrides(rewrite=args.rewrite, adaptive=args.adaptive, window=args.window,
+                        multi="off")
+        base = eval_once("multi=off")
+        apply_overrides(rewrite=args.rewrite, adaptive=args.adaptive, window=args.window,
+                        multi="on")
+        on = eval_once("multi=on")
+        print("\n=== RAG 评测：多路召回开关对比 ===")
+        _print_table([base, on])
+        return
+
     apply_overrides(rerank=args.rerank, rewrite=args.rewrite,
-                    adaptive=args.adaptive, parent=args.parent)
+                    adaptive=args.adaptive, parent=args.parent,
+                    multi=args.multi, window=args.window)
     res = eval_once()
     print("\n=== RAG 检索评测 ===")
     _print_table([res])
