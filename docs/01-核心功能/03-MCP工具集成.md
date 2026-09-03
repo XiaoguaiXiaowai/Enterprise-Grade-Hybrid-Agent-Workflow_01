@@ -2,7 +2,7 @@
 
 > 状态：现行 · 最后校验：2026-08-18 · 校验方式：符号级 + 行为实测（`scripts/smoke_mcp_core.py` 26 断言）
 > 一句话：**工具可以长在外部系统里（MCP），但能不能被调、由谁调、调完留什么痕，必须由 Harness 说了算**——MCP 解决「连接」，我们解决「治理」。
-> 设计决策与演进见 [MCP接入设计.md](../02-架构设计/MCP接入设计.md)；面试金句与演示话术见 [面试文档.md](../05-面试素材/面试文档.md)。
+> 设计决策与演进见 [MCP接入设计.md](../02-架构设计/05-MCP接入设计.md)；核心设计原则（工具外置、治理不外包）见 [02-架构设计/05-MCP接入设计.md](../02-架构设计/05-MCP接入设计.md) 的「金句」一节。
 
 ---
 
@@ -102,4 +102,4 @@ python scripts/diag_mcp_stdio.py     # 🔌 stdio 拉起失败真因诊断
 
 ## 6. 相关配置键
 
-`MCP_ENABLED` / `MCP_CONFIG_PATH` / `MCP_TIMEOUT_SECONDS` / `GITHUB_MCP_TOKEN` → 见 [配置清单.md](../03-部署运维/配置清单.md) 第 10 节。
+`MCP_ENABLED` / `MCP_CONFIG_PATH` / `MCP_TIMEOUT_SECONDS` / `GITHUB_MCP_TOKEN` → 见 [配置清单.md](../03-部署运维/配置清单.md) 第 9 节。

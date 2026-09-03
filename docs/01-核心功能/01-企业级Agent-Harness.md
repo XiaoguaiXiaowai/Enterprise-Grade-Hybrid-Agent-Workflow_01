@@ -73,7 +73,7 @@
 
 ## 3. 状态机与收敛（含 `pending_confirm`）
 
-状态全集与转移表定义于 `app/state_machine.py:TRANSITIONS`（校验函数 `can_transition`），持久化与乐观锁见 `app/daos/tickets.py:transition`。**完整设计详见 [状态机设计.md](../02-架构设计/状态机设计.md)**，这里给出可执行事实：
+状态全集与转移表定义于 `app/state_machine.py:TRANSITIONS`（校验函数 `can_transition`），持久化与乐观锁见 `app/daos/tickets.py:transition`。**完整设计详见 [状态机设计.md](../02-架构设计/02-状态机设计.md)**，这里给出可执行事实：
 
 | from | to |
 |---|---|
@@ -89,7 +89,7 @@
 | `cancelled` | `archived` |
 | `archived` | — |
 
-**关键语义（与直觉不同，面试重点）**：
+**关键语义（与直觉不同，重点讲解）**：
 
 1. **`agent_running` 不能直接 `done`**：回合收敛后工单先到 `pending_confirm`（待客户确认完成），`POST /api/tickets/{id}/confirm`（`app/api/tickets.py:confirm`）确认后才 `done` 并写 `confirmed` 事件——**终态由人确认，不由模型自封**。
 2. **收敛路径**：`app/orchestrator.py:_run_loop` 回合完成后 `daos.transition(ticket_id, "pending_confirm", ...)`（orchestrator.py:404）并写 `deliver` 事件「本轮处理完成，请确认是否完成」；返回值 `{"status":"done"}` 表示**回合结果**，工单状态此时为 `pending_confirm`（`scripts/run_all_tests.py` 断言 `r==done, t==pending_confirm`）。
@@ -129,7 +129,7 @@ run / 追问 / 审批端点**只做校验与入队，立即返回**，Agent 循�
 | `ChangeAgent` | 高危变更（开通/回收权限、CMDB 负责人变更、GitHub 建 issue） | `grant_db_readonly` `revoke_db_readonly` + `cmdb__update_asset_owner` `github__create_issue` | 高 |
 | `CmdbAgent`（M5） | CMDB 外部工具面（MCP） | `cmdb__query_asset` `cmdb__list_network_devices`（只读）`cmdb__update_asset_owner`（高风险） | 低/高 |
 
-handoff 工具名（`agents_defs.py:81-84`）：`transfer_to_knowledge_agent` / `transfer_to_identity_agent` / `transfer_to_change_agent` / `transfer_to_cmdb_agent`。所有 Agent 共享同一 dict 上下文（`ticket_id`/`actor`/`budget`），每个 Agent 可经 `model_fn` 差异化配置模型。多 Agent 设计权衡详见 [多Agent编排.md](../02-架构设计/多Agent编排.md)。
+handoff 工具名（`agents_defs.py:81-84`）：`transfer_to_knowledge_agent` / `transfer_to_identity_agent` / `transfer_to_change_agent` / `transfer_to_cmdb_agent`。所有 Agent 共享同一 dict 上下文（`ticket_id`/`actor`/`budget`），每个 Agent 可经 `model_fn` 差异化配置模型。多 Agent 设计权衡详见 [多Agent编排.md](../02-架构设计/03-多Agent编排.md)。
 
 ### 4.4 降级链（三级 + 一级）
 
@@ -409,9 +409,9 @@ curl -s localhost:8000/api/governance/traces/$TID -H "X-Auth-Token: $TOKEN"
 
 | 主题 | 本文档 | 其他文档 |
 |---|---|---|
-| 状态机语义/并发安全 | §3 现状事实 | [状态机设计.md](../02-架构设计/状态机设计.md)（为什么这么设计） |
-| 多 Agent 分工 | §4.3 清单 | [多Agent编排.md](../02-架构设计/多Agent编排.md)（设计权衡） |
-| 治理四件套细节 | §6 现状事实 | [治理层设计.md](../02-架构设计/治理层设计.md) |
+| 状态机语义/并发安全 | §3 现状事实 | [状态机设计.md](../02-架构设计/02-状态机设计.md)（为什么这么设计） |
+| 多 Agent 分工 | §4.3 清单 | [多Agent编排.md](../02-架构设计/03-多Agent编排.md)（设计权衡） |
+| 治理四件套细节 | §6 现状事实 | [治理层设计.md](../02-架构设计/07-治理层设计.md) |
 | 配置键权威清单 | 引用 | [配置清单.md](../03-部署运维/配置清单.md)（唯一权威源） |
 | 能力→代码逐条映射 | §1 锚点 | [能力-代码映射表.md](06-能力-代码映射表.md)（11 条主线全量映射） |
 | 测试用例与运行方式 | §10 命令集 | [测试指南.md](../04-开发指南/测试指南.md) |

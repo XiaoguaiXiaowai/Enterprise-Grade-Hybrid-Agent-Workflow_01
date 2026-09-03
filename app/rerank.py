@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from .config import settings
-from .tracelog import log_exception
+from .tracelog import log_exception, trace_call
 
 # 进程级缓存：Ollama 兜底可用性（None=未探测，True/False=结果）
 _ollama_rerank_ok: bool | None = None
@@ -41,7 +41,7 @@ def _probe_ollama_rerank() -> bool:
         _ollama_rerank_ok = False
     return _ollama_rerank_ok
 
-
+@trace_call("app.rerank.rerank")
 def rerank(query: str, docs: list[dict], top_k: int) -> tuple[list[dict], str]:
     """对候选文档精排，返回 (排序后的 docs, 来源标识 source)。
 
@@ -130,7 +130,7 @@ def _try_ollama(query: str, texts: list[str]) -> list[tuple[int, float]] | None:
         log_exception()
         return None
 
-
+@trace_call("app.rerank.rewrite_query")
 def rewrite_query(query: str) -> str:
     """LLM 查询改写：口语化 → 利于向量/关键词检索；失败/未启用时原样返回。
 

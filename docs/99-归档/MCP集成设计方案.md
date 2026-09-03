@@ -1,4 +1,4 @@
-> **历史记录，非现行事实** · 本方案 M5（P0/P1/P2）已全部实现；文中「设计样例」与实现存在出入（顶层 enabled 键、gitlab→github、FastMCP→MCPServer API、mcp==2.0.0、超时参数等）。现行设计见 [02-架构设计/MCP接入设计.md](../02-架构设计/MCP接入设计.md)，实现见 [01-核心功能/03-MCP工具集成.md](../01-核心功能/03-MCP工具集成.md)。
+> **历史记录，非现行事实** · 本方案 M5（P0/P1/P2）已全部实现；文中「设计样例」与实现存在出入（顶层 enabled 键、gitlab→github、FastMCP→MCPServer API、mcp==2.0.0、超时参数等）。现行设计见 [02-架构设计/MCP接入设计.md](../02-架构设计/05-MCP接入设计.md)，实现见 [01-核心功能/03-MCP工具集成.md](../01-核心功能/03-MCP工具集成.md)。
 
 # MCP（Model Context Protocol）集成设计方案
 
@@ -28,7 +28,7 @@ app/agents_defs.py       ← 按职责分给 4 个 Agent（Triage + Knowledge/Id
 
 **MCP 的价值**：工具实现可以**外置**到独立的 MCP Server 进程/服务，本项目只保留「治理壳」——这正是本项目叙事（执行权交给确定性的流程与治理）的自然延伸：**工具实现可以外包，治理不能外包**。
 
-### 1.3 一个面试金句
+### 1.3 一个核心金句
 
 > 「工具可以长在外部系统里（MCP），但工具能不能被调、由谁调、调完留什么痕，必须由我们的 Harness 说了算——这就是 MPC-Skill 与 MCP 的分工：**MCP 解决'连接'，我们解决'治理'**。」
 
@@ -361,7 +361,7 @@ def register_mcp_proxies():
 
 ---
 
-## 7. 示例 MCP Server：mcp-cmdb（面试演示载体）
+## 7. 示例 MCP Server：mcp-cmdb（演示载体）
 
 `scripts/mcp_servers/cmdb_server.py`——纯 Python + 官方 `mcp` SDK（`pip install mcp`），stdio 传输，数据存 `data/cmdb.json`：
 
@@ -390,7 +390,7 @@ if __name__ == "__main__":
     mcp.run(transport="stdio")
 ```
 
-演示剧本（面试 2 分钟）：
+演示剧本（2 分钟）：
 
 1. **只读**：员工建单「web-01 这台服务器的负责人和机房在哪？」→ Triage → handoff `CmdbAgent` → `cmdb__query_asset` 查询 → 收敛。Trace 里能看到 `context_source=mcp` 的工具调用。
 2. **高风险**：运维建单「把 web-01 负责人改成张三」→ `cmdb__update_asset_owner`（`needs_approval=True`）→ 工单进审批台 → 批准 → 恢复同一 run 完成变更 → Trace 回放全链路。
@@ -427,11 +427,11 @@ GITLAB_MCP_TOKEN=                   # 远程 server 鉴权（${ENV} 注入，不
 | **P1 治理完善** | 参数校验、输出脱敏、超时/重试/健康检查、`/api/mcp` 管理端点、`register_mcp_proxies`（降级链路）、`mcp` 包入 requirements、文档 | `scripts/smoke_mcp.py --all` 全绿；`GET /api/mcp/servers` 可看状态；断开 cmdb 后工单优雅降级 |
 | **P2 生态增强** | `streamable_http`/`sse` 远程 server 支持、OAuth/Bearer 鉴权演示、前端「MCP 工具面」页面、工具清单缓存热刷新 | 远程 server 演示（如 github-mcp-server 只读仓库信息）接入；前端展示 server 状态与工具映射表 |
 
-建议顺序：P0 先落（半天工作量，可并入 M5 README），P1/P2 按面试需要裁剪。
+建议顺序：P0 先落（半天工作量，可并入 M5 README），P1/P2 按演示需要裁剪。
 
 ---
 
-## 10. 面试讲法（30 秒版）
+## 10. 讲法（30 秒版）
 
 > **问：你们工具层怎么接外部系统？**
 > 答：工具面是两套——本地 MPC-Skill（写死在 registry 的硬白名单）和 MCP（外部工具标准协议）。MCP server 的工具不能直接挂给模型，必须过我们的映射表白名单：谁暴露、暴露什么、什么风险、谁能调、要不要审批，全部显式声明；调用走与本地工具完全相同的治理链路——预算、去重、落库、脱敏、Trace，高风险写操作照样进审批台。工具实现可以外包给外部系统，但**治理不能外包**。这也是我们演示里 `cmdb__update_asset_owner` 和 `grant_db_readonly` 走同一个审批台的原因。

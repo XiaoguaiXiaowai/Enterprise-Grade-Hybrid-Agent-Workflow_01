@@ -5,8 +5,7 @@
 > **一个企业 IT 工单智能处理系统，展示「企业级 Agent Harness」的 8 大工程能力 + RAG / MCP / 高并发三大亮点。**
 > 它不是演示 AI 多聪明，而是演示 **AI 如何被可靠、可控、可审计地接进企业业务**。
 
-- 📚 **文档中心**：全部文档入口见 [`docs/README.md`](docs/README.md)（核心功能 / 架构设计 / 部署运维 / 开发指南 / 面试素材 / 归档）
-- 📋 **面试用**：《[面试文档](docs/05-面试素材/面试文档.md)》（30 秒介绍 + 10 分钟演示脚本 + 能力讲法 + QA 预案）
+- 📚 **文档中心**：全部文档入口见 [`docs/README.md`](docs/README.md)（核心功能 / 架构设计 / 部署运维 / 开发指南 / 归档）
 - 🚀 **本地跑起来**：[快速开始](docs/00-项目概览/快速开始.md) · [部署手册](docs/03-部署运维/部署手册.md)
 - 🗺️ **亮点 → 代码映射**（11 条主线，可追溯可验证）：[能力-代码映射表](docs/01-核心功能/06-能力-代码映射表.md)
 - ✅ **里程碑**：M1 骨架 ✓ · M2 Harness 内核 ✓ · M3 前端/知识库/部署 ✓ · M4 OpenAI Agents SDK 演进 ✓ · **M5 MCP 集成 ✓** · **架构高并发加固阶段 1 ✓**（演进记录见 [里程碑-M1至M5](docs/99-归档/里程碑-M1至M5.md)）
@@ -256,19 +255,19 @@ flowchart LR
 
 | 层 | 选型 | 为什么 |
 |---|---|---|
-| 后端 | Python + FastAPI | 轻量、结构化、面试可逐行讲解 |
+| 后端 | Python + FastAPI | 轻量、结构化、便于逐行讲解实现 |
 | Workflow | 自研状态机 | 不用 LangGraph，快照/HITL 原理可控可讲 |
 | LLM 编排 | OpenAI Agents SDK（`openai-agents==0.20.0`） | `agent+Runner` 原生工具循环 / 多 Agent handoff / 原生 HITL 中断 |
 | 模型 | OpenRouter 主 ⇄ Ollama 兜底 ⇄ 离线 reader | `RouterProvider` 统一 Chat Completions，三级降级离线可演示 |
 | RAG | LanceDB 向量 + SQLite FTS5 + rerank | 双路召回 + RRF + 精排，16 条标注评测基线（recall@1 0.938→1.000） |
 | MCP | `mcp==2.0.0`（stdio + streamable_http） | 外部工具标准接入，**连接可以外包，治理不能外包** |
 | 存储 | SQLite（WAL）+ 文件系统 | 单机、0 成本、状态外部化 |
-| 前端 | Next.js 14 (App Router) | 贴近真实企业栈，与 FastAPI 解耦，面试加分 |
+| 前端 | Next.js 14 (App Router) | 贴近真实企业栈，与 FastAPI 解耦，架构更完整 |
 | 部署 | Docker Compose + Nginx（单机） | 阿里云 Ubuntu 零成本上线；CI 自动部署 + 文档门禁 |
 
 ---
 
-## 演示路径（面试 10 分钟版）
+## 演示路径（10 分钟版）
 
 1. 建一张「开通 DB 只读账号」的高风险工单 → 秒级建单 + 流式 stage 进度 + 风险自动分级
 2. 看 Agent LOOP：上下文装配（选/压/截）、Triage → 子 Agent handoff、工具白名单、脱敏

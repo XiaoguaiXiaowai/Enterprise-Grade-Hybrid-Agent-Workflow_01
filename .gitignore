@@ -16,3 +16,6 @@ logs/
 text.log
 *.tsbuildinfo
 tmp/
+
+# 面试素材与个人资料：仅本地使用，禁止提交到公开仓库
+docs/05-面试素材/
